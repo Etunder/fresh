@@ -31,12 +31,6 @@
       "type": "boolean",
       "default": false
     },
-    "orchestrator_mode": {
-      "description": "When on (default), `fresh` with no arguments reattaches to a single background\neditor with the workspace dock and your last workspace. When off, it opens a\nplain editor in the current directory; runs with files or flags are unaffected.",
-      "type": "boolean",
-      "default": true,
-      "x-order": 1
-    },
     "editor": {
       "description": "Editor behavior settings (indentation, line numbers, wrapping, etc.)",
       "$ref": "#/$defs/EditorConfig",

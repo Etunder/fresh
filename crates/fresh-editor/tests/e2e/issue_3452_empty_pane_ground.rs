@@ -14,7 +14,6 @@ fn empty_workspace(use_terminal_bg: bool) -> EditorTestHarness {
     config.editor.auto_create_empty_buffer_on_last_buffer_close = false;
     config.file_explorer.auto_open_on_last_buffer_close = false;
     config.editor.use_terminal_bg = use_terminal_bg;
-    config.orchestrator_mode = false;
 
     let mut harness = EditorTestHarness::with_config(100, 32, config).unwrap();
     harness.load_buffer_from_text("line one\nline two").unwrap();

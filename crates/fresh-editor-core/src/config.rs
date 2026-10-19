@@ -468,13 +468,6 @@ pub struct Config {
     #[serde(default)]
     pub self_update: bool,
 
-    /// When on (default), `fresh` with no arguments reattaches to a single background
-    /// editor with the workspace dock and your last workspace. When off, it opens a
-    /// plain editor in the current directory; runs with files or flags are unaffected.
-    #[serde(default = "default_true")]
-    #[schemars(extend("x-order" = 1))]
-    pub orchestrator_mode: bool,
-
     /// Editor behavior settings (indentation, line numbers, wrapping, etc.)
     #[serde(default)]
     pub editor: EditorConfig,
@@ -2975,7 +2968,6 @@ impl Default for Config {
             locale: LocaleName::default(),
             check_for_updates: false,
             self_update: false,
-            orchestrator_mode: true,
             editor: EditorConfig::default(),
             file_explorer: FileExplorerConfig::default(),
             sidebar: SidebarConfig::default(),
