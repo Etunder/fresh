@@ -1,0 +1,60 @@
+name: herdr build
+
+# The fork's deliverable: a fresh.exe for the wr/herdr team environment (Windows, no admin), built
+# on every push to master and on pull requests, attached to a GitHub release for `v*` tags.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: fresh.exe (windows x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Build
+        run: cargo build --release -p fresh-editor --bin fresh
+      - name: Smoke test
+        run: target/release/fresh.exe --version
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-windows-x64
+          path: target/release/fresh.exe
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fresh-windows-x64
+      - name: Checksum
+        run: sha256sum fresh.exe > fresh.exe.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" fresh.exe fresh.exe.sha256 --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes "herdr fork build"
