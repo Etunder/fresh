@@ -1,3 +1,5 @@
+> **herdr edition**: this fork of Fresh is restyled after herdr, drops the Orchestrator and is gaining native Jupyter notebooks. See [docs/herdr](docs/herdr/README.md).
+
 # Fresh
 
 A modern, full-featured terminal text editor, **with zero configuration**. Familiar keybindings, mouse support, and IDE-level features — no learning curve required.

@@ -458,15 +458,14 @@ pub struct Config {
     #[serde(default)]
     pub locale: LocaleName,
 
-    /// Check for new versions on startup (default: true).
-    /// Also sends basic anonymous telemetry (version, OS, terminal type).
-    #[serde(default = "default_true")]
+    /// Check for new versions on startup (default: false in this fork: the check asks upstream
+    /// Fresh, whose releases are not this build, and sends basic anonymous telemetry).
+    #[serde(default)]
     pub check_for_updates: bool,
 
-    /// Offer to update from inside the editor when a new version is found (default: true).
-    /// When off, the status-bar indicator only tells you an update exists.
-    /// Needs `check_for_updates` and an install method that can self-update.
-    #[serde(default = "default_true")]
+    /// Offer to update from inside the editor when a new version is found (default: false in
+    /// this fork, which is built without self-update: updating would replace it with upstream).
+    #[serde(default)]
     pub self_update: bool,
 
     /// When on (default), `fresh` with no arguments reattaches to a single background
@@ -2974,8 +2973,8 @@ impl Default for Config {
             version: 0,
             theme: default_theme_name(),
             locale: LocaleName::default(),
-            check_for_updates: true,
-            self_update: true,
+            check_for_updates: false,
+            self_update: false,
             orchestrator_mode: true,
             editor: EditorConfig::default(),
             file_explorer: FileExplorerConfig::default(),

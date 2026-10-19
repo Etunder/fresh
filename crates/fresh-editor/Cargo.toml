@@ -72,7 +72,8 @@ path = "tests/scene_parity.rs"
 required-features = ["web"]
 
 [features]
-default = ["plugins", "runtime", "embed-plugins", "tree-sitter", "http", "self-update", "oxc"]
+# No "self-update": this fork must never replace itself with an upstream release.
+default = ["plugins", "runtime", "embed-plugins", "tree-sitter", "http", "oxc"]
 plugins = [
     "dep:fresh-plugin-runtime",
 ]

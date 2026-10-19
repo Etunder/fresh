@@ -22,14 +22,14 @@
       "default": null
     },
     "check_for_updates": {
-      "description": "Check for new versions on startup (default: true).\nAlso sends basic anonymous telemetry (version, OS, terminal type).",
+      "description": "Check for new versions on startup (default: false in this fork: the check asks upstream\nFresh, whose releases are not this build, and sends basic anonymous telemetry).",
       "type": "boolean",
-      "default": true
+      "default": false
     },
     "self_update": {
-      "description": "Offer to update from inside the editor when a new version is found (default: true).\nWhen off, the status-bar indicator only tells you an update exists.\nNeeds `check_for_updates` and an install method that can self-update.",
+      "description": "Offer to update from inside the editor when a new version is found (default: false in\nthis fork, which is built without self-update: updating would replace it with upstream).",
       "type": "boolean",
-      "default": true
+      "default": false
     },
     "orchestrator_mode": {
       "description": "When on (default), `fresh` with no arguments reattaches to a single background\neditor with the workspace dock and your last workspace. When off, it opens a\nplain editor in the current directory; runs with files or flags are unaffected.",
