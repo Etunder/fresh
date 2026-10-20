@@ -270,18 +270,36 @@ function rememberKernel(ipynb: string, choice: Choice): void {
 
 /** The working copy for a notebook: under the data dir, named after it so the tab reads well. */
 function workingCopyPath(ipynb: string): string {
-  const key = ipynb.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(-60);
-  const dir = editor.pathJoin(editor.getDataDir(), "notebooks", key);
+  // inside the notebook's repo when it has one, under .git where git keeps no track of it: the
+  // language server then sees the copy as part of the project (its venv, its modules)
+  const root = repoRoot(editor.pathDirname(ipynb));
+  const base = root ? editor.pathJoin(root, ".git", "fresh-notebooks") : editor.pathJoin(editor.getDataDir(), "notebooks");
+  const name = root ? ipynb.slice(root.length) : ipynb;
+  const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(-60);
+  const dir = editor.pathJoin(base, key);
   editor.createDir(dir);
   // which notebook this is, for a working copy the editor restores on its own (below)
   editor.writeFile(editor.pathJoin(dir, "notebook.txt"), ipynb);
   return editor.pathJoin(dir, editor.pathBasename(ipynb) + ".py");
 }
 
+/** The repository `dir` is in: the nearest folder up with a `.git` directory (not a worktree's
+ *  `.git` file, which has no room for the copies). */
+function repoRoot(dir: string): string | null {
+  for (let d = dir; ; ) {
+    const git = editor.fileStat(editor.pathJoin(d, ".git")) as { isDir?: boolean } | null;
+    if (git?.isDir) return d;
+    const up = editor.pathDirname(d);
+    if (!up || up === d) return null;
+    d = up;
+  }
+}
+
 /** The notebook a working copy belongs to, if `path` is one (from the note beside it). */
 function notebookOfCopy(path: string): string | null {
-  const root = editor.pathJoin(editor.getDataDir(), "notebooks");
-  if (!path.startsWith(root) || !path.endsWith(".py")) return null;
+  const inData = path.startsWith(editor.pathJoin(editor.getDataDir(), "notebooks"));
+  const inRepo = /[\\/]\.git[\\/]fresh-notebooks[\\/]/.test(path);
+  if (!(inData || inRepo) || !path.endsWith(".py")) return null;
   const note = editor.readFile(editor.pathJoin(editor.pathDirname(path), "notebook.txt"));
   return note ? note.trim() : null;
 }

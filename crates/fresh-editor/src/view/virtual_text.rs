@@ -91,6 +91,12 @@ impl MarkerGravity {
 pub struct VirtualTextNamespace(pub String);
 
 impl VirtualTextNamespace {
+    /// Where the LSP's inlay hints live: refreshing or dropping them clears this namespace only,
+    /// not the virtual text and lines plugins draw in the same buffer.
+    pub fn inlay_hints() -> Self {
+        Self("lsp-inlay-hints".to_string())
+    }
+
     /// Create a namespace from a string (for plugin registration)
     pub fn from_string(s: String) -> Self {
         Self(s)
@@ -258,6 +264,13 @@ impl VirtualTextManager {
         self.texts.insert(id, vtext);
         self.bump_version();
         id
+    }
+
+    /// Put an entry in a namespace (for entries made by an `add*` that takes none).
+    pub fn set_namespace(&mut self, id: VirtualTextId, namespace: VirtualTextNamespace) {
+        if let Some(vtext) = self.texts.get_mut(&id) {
+            vtext.namespace = Some(namespace);
+        }
     }
 
     /// Add a virtual text entry

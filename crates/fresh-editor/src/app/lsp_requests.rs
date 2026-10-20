@@ -1527,8 +1527,11 @@ impl Editor {
         use crate::view::virtual_text::VirtualTextPosition;
         use ratatui::style::{Color, Style};
 
-        // Clear existing inlay hints
-        state.virtual_texts.clear(&mut state.marker_list);
+        // Clear existing inlay hints (theirs only: plugins' virtual text in the buffer stays)
+        let namespace = crate::view::virtual_text::VirtualTextNamespace::inlay_hints();
+        state
+            .virtual_texts
+            .clear_namespace(&mut state.marker_list, &namespace);
 
         if hints.is_empty() {
             return;
@@ -1612,7 +1615,7 @@ impl Editor {
                 VirtualTextPosition::BeforeChar => crate::view::virtual_text::MarkerGravity::Left,
                 _ => crate::view::virtual_text::MarkerGravity::Right,
             };
-            state.virtual_texts.add_with_theme_keys(
+            let id = state.virtual_texts.add_with_theme_keys(
                 &mut state.marker_list,
                 byte_offset,
                 display_text,
@@ -1623,6 +1626,7 @@ impl Editor {
                 0, // Default priority
                 gravity,
             );
+            state.virtual_texts.set_namespace(id, namespace.clone());
         }
 
         tracing::debug!("Applied {} inlay hints as virtual text", hints.len());
@@ -4313,6 +4317,41 @@ mod tests {
         assert_eq!(vtexts.len(), 1);
         assert_eq!(vtexts[0].text, ": i32");
         assert_eq!(vtexts[0].position, VirtualTextPosition::AfterChar);
+    }
+
+    #[test]
+    fn test_inlay_hints_leave_other_virtual_text_alone() {
+        // A refresh replaces the previous hints, and only them: a plugin's virtual text in the
+        // same buffer (a notebook's cell margin, say) stays.
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
+        state.buffer = Buffer::from_str_test("ab");
+        state.marker_list.adjust_for_insert(0, state.buffer.len());
+        state.virtual_texts.add_with_id(
+            &mut state.marker_list,
+            0,
+            "  ".to_string(),
+            ratatui::style::Style::default(),
+            VirtualTextPosition::BeforeChar,
+            0,
+            "plugin-pad".to_string(),
+        );
+
+        let hints = vec![make_hint(0, 1, ": i32", Some(InlayHintKind::TYPE))];
+        Editor::apply_inlay_hints_to_state(&mut state, &hints);
+        let hints = vec![make_hint(0, 1, ": str", Some(InlayHintKind::TYPE))];
+        Editor::apply_inlay_hints_to_state(&mut state, &hints);
+
+        let lookup = state
+            .virtual_texts
+            .build_lookup(&state.marker_list, 0, state.buffer.len());
+        assert_eq!(lookup.get(&0).map(|v| v[0].text.as_str()), Some("  "));
+        let hint: Vec<&str> = lookup[&1].iter().map(|v| v.text.as_str()).collect();
+        assert_eq!(hint, [": str"]);
     }
 
     #[test]

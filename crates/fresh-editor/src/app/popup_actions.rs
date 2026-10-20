@@ -567,7 +567,7 @@ impl Editor {
     ) -> Vec<crate::model::event::PopupListItemData> {
         let prefix = self.completion_word_prefix();
 
-        let matching: Vec<LspCompletionCandidate> = self
+        let mut matching: Vec<LspCompletionCandidate> = self
             .active_window()
             .completion_items
             .iter()
@@ -575,6 +575,15 @@ impl Editor {
             .filter(|candidate| completion_matches_prefix(&candidate.item, &prefix))
             .cloned()
             .collect();
+        // a plugin's candidate a server already offers is the same name twice (a notebook's
+        // kernel and the language server both know `df`): keep the server's, which can resolve.
+        // Servers' own repeats stay — an auto-import list offers one `HashMap` per crate.
+        let from_servers: std::collections::HashSet<String> = matching
+            .iter()
+            .filter(|c| c.server.is_some())
+            .map(|c| c.item.label.clone())
+            .collect();
+        matching.retain(|c| c.server.is_some() || !from_servers.contains(&c.item.label));
 
         let mut rows = lsp_items_to_popup_items(&matching.iter().collect::<Vec<_>>());
         self.active_window_mut().completion_popup_lsp_items = matching;

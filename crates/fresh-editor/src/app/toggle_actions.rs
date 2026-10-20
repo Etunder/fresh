@@ -797,7 +797,10 @@ impl Editor {
                 .map(|w| &mut w.buffers)
                 .expect("active window present")
             {
-                state.virtual_texts.clear(&mut state.marker_list);
+                state.virtual_texts.clear_namespace(
+                    &mut state.marker_list,
+                    &crate::view::virtual_text::VirtualTextNamespace::inlay_hints(),
+                );
             }
             self.set_status_message(t!("toggle.inlay_hints_disabled").to_string());
         }

@@ -30,5 +30,35 @@
       ],
       "separator": "·"
     }
+  },
+  "lsp": {
+    "python": [
+      {
+        "command": "basedpyright-langserver",
+        "args": [
+          "--stdio"
+        ],
+        "enabled": true,
+        "auto_start": true,
+        "name": "basedpyright",
+        "root_markers": [
+          "pyproject.toml",
+          "setup.py",
+          "setup.cfg",
+          "pyrightconfig.json",
+          ".git"
+        ],
+        "initialization_options": {
+          "basedpyright": {
+            "analysis": {
+              "typeCheckingMode": "standard",
+              "diagnosticSeverityOverrides": {
+                "reportUnusedExpression": "none"
+              }
+            }
+          }
+        }
+      }
+    ]
   }
 }
