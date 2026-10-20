@@ -20,6 +20,10 @@ in WezTerm on Windows, so the fork:
   changed). The kernel side is herdr-wr's `nb serve` (setting `plugins.notebook.nbCommand`, default
   `nb` on PATH), which picks the repo's venv like `wr` does (`plugins/notebook.ts`; plan:
   `herdr-wr/docs/notebook-plan.md`);
+- **previews markdown typeset**: "Markdown: Open Preview to the Side" shows a `.md` file laid out
+  by Typst (through `nb serve`) as kitty images in a pane beside it. It re-typesets as you type,
+  scrolls with the file, and a click on the page puts the cursor on the markdown under it
+  (`plugins/markdown_preview.ts`);
 - **drops what herdr already does**: no Orchestrator (workspaces, agent sessions, the dock);
   herdr manages the panes and the agents;
 - **never updates itself from upstream**: self-update is not built in and the update check is
@@ -40,4 +44,8 @@ commits so conflicts are easy to read.
 A notebook, after running its cells and saving:
 
 ![notebook](screenshots/notebook.png)
+
+A markdown file and its preview:
+
+![markdown preview](screenshots/markdown-preview.png)
 
