@@ -176,6 +176,27 @@ impl Editor {
             None => (None, None),
         };
 
+        // On a plugin's virtual line: its index among the virtual rows after
+        // the last real row above it (the line `byte` resolves to)
+        let mc_virtual_row = self.active_window().pane_view(split_id).and_then(|v| {
+            let r = row.checked_sub(content_rect.y)? as usize;
+            if !v.rows.get(r)?.is_plugin_virtual {
+                return None;
+            }
+            let real = v.rows[..r].iter().rposition(|m| !m.is_plugin_virtual)?;
+            Some((r - real - 1) as u32)
+        });
+        let mc_virtual_col = mc_virtual_row.and_then(|_| {
+            let gutter = self
+                .windows
+                .get(&self.active_window)?
+                .buffers
+                .get(&buffer_id)?
+                .margins
+                .left_total_width() as u16;
+            Some(col.checked_sub(content_rect.x + gutter)? as u32)
+        });
+
         // A press on a widget never reaches here: a mounted panel's widgets
         // are nodes in the tree, and a node answers its own press and stops
         // it (`view::shell::widgets`). What arrives is a press the panel's
@@ -213,6 +234,8 @@ impl Editor {
                     buffer_id: Some(buffer_id.0 as u64),
                     buffer_row: mc_buffer_row,
                     buffer_col: mc_buffer_col,
+                    virtual_row: mc_virtual_row,
+                    virtual_col: mc_virtual_col,
                 },
             );
         }

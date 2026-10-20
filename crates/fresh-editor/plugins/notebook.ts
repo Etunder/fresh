@@ -90,6 +90,11 @@ type Notebook = {
   markReady: () => void;
   /** The .ipynb's JSON view, closed once the working copy has opened. */
   jsonBuffer: number | null;
+  /** The markdown cell the cursor was in at the last redraw (its source shows, the others are
+   *  typeset), and the typeset ones by the line of their `# %%` marker, for clicks. */
+  cursorCell?: string | null;
+  typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
+  spans?: Span[];
 };
 
 const byCopy = new Map<string, Notebook>();
@@ -840,6 +845,115 @@ function dropStaleImages(): void {
   deleteImages(stale);
 }
 
+// ── markdown cells, typeset ──────────────────────────────────────────
+
+/** Where a line of a markdown cell's text is: in the markdown nb typesets, and in the buffer
+ *  (past its `# `). */
+type MdLine = { md: number; buf: number };
+/** A markdown cell typeset by nb (Typst) as tiles of one long page: shown in place of the cell's
+ *  source while the cursor is in another cell. `key` is what it was made from. */
+type Page = { key: string; state: "pending" | "failed" | "ready"; tiles: Image[]; rowPx: number };
+const pages = new Map<Notebook, Map<string, Page>>();
+/** The tiles' images, by their hash (the same slice of page is sent once). */
+const pageTiles = new Map<string, Image>();
+const PAGE_TILE_ROWS = 8;
+/** Pixels drawn per terminal pixel, for HiDPI. */
+const PAGE_DENSITY = 2;
+const PAGE_SIZE_PT = 11;
+
+/** A markdown cell's text without its `# ` prefixes, and where each line of it is. */
+function cellMarkdown(s: Span, lineAt: Map<number, string>): { md: string; lines: MdLine[] } {
+  let md = "";
+  const lines: MdLine[] = [];
+  for (const lineStart of s.lineStarts) {
+    const raw = lineAt.get(lineStart) ?? "";
+    const prefix = /^# ?/.exec(raw)?.[0] ?? "";
+    lines.push({ md: bytes(md), buf: lineStart + bytes(prefix) });
+    md += raw.slice(prefix.length) + "\n";
+  }
+  return { md, lines };
+}
+
+/** The cell's typeset page, or null while nb is making it (the notebook is redrawn when it comes)
+ *  or if it can't. */
+function cellPage(nb: Notebook, s: Span, md: string): Page | null {
+  if (!IMAGES || !md.trim()) return null;
+  const [cw, ch] = cellPixels();
+  const width = editor.getViewport()?.width ?? 80;
+  // a page of text: as wide as the pane, up to a readable measure
+  const cols = Math.max(20, Math.min(120, width - 4));
+  const key = `${cols} ${md}`;
+  let byCell = pages.get(nb);
+  if (!byCell) pages.set(nb, (byCell = new Map()));
+  const known = byCell.get(s.cell.id);
+  if (known?.key === key) return known.state === "ready" ? known : null;
+  const rowPx = ch * PAGE_DENSITY;
+  const page: Page = { key, state: "pending", tiles: [], rowPx };
+  byCell.set(s.cell.id, page);
+  void ask(nb, "md", {
+    id: `cell:${s.cell.id}`,
+    text: md,
+    dir: editor.pathDirname(nb.ipynb),
+    width_px: cols * cw * PAGE_DENSITY,
+    // the em about as tall as the terminal's own letters
+    px_per_pt: (0.8 * rowPx) / PAGE_SIZE_PT,
+    size_pt: PAGE_SIZE_PT,
+    tile_px: PAGE_TILE_ROWS * rowPx,
+    row_px: rowPx,
+    theme: {
+      fg: themeHex("editor.fg", "#c0caf5"),
+      accent: themeHex("ui.tab_active_bg", "#7aa2f7"),
+      muted: themeHex("editor.line_number_fg", "#565f89"),
+      code_bg: themeHex("ui.notebook_cell_bg", "#1f2335"),
+      link: themeHex("syntax.type", "#7dcfff"),
+    },
+    have: [...pageTiles.keys()],
+  }).then((r) => {
+    if (byCell!.get(s.cell.id) !== page) return;
+    if (!r.ok || !Array.isArray(r.tiles)) {
+      page.state = "failed";
+      editor.debug(`notebook: markdown cell not typeset: ${r.message ?? "?"}`);
+      return;
+    }
+    for (const t of r.tiles as { hash: string; height: number; png?: string }[]) {
+      const rows = Math.min(DIACRITICS.length, Math.max(1, Math.round(t.height / rowPx)));
+      let img = pageTiles.get(t.hash);
+      if (!img && t.png) {
+        img = { id: nextImageId++, cols, rows };
+        if (!uploadPng(t.png, img.id, cols, rows)) {
+          page.state = "failed";
+          return;
+        }
+        pageTiles.set(t.hash, img);
+      }
+      if (!img) {
+        // nb thought we had it: ask again, sending everything
+        pageTiles.clear();
+        byCell!.delete(s.cell.id);
+        void decorate(nb);
+        return;
+      }
+      page.tiles.push(img);
+    }
+    page.state = "ready";
+    void decorate(nb);
+  });
+  return null;
+}
+
+/** Deletes the tiles no page shows any more. */
+function dropStalePages(): void {
+  const live = new Set<number>();
+  for (const byCell of pages.values()) for (const p of byCell.values()) p.tiles.forEach((t) => live.add(t.id));
+  const stale: number[] = [];
+  for (const [hash, img] of pageTiles) {
+    if (live.has(img.id)) continue;
+    stale.push(img.id);
+    pageTiles.delete(hash);
+  }
+  deleteImages(stale);
+}
+
 // ── drawing ──────────────────────────────────────────────────────────
 
 /** A line drawn under a cell: text in a theme colour, or one row of an image. */
@@ -1075,10 +1189,19 @@ async function decorate(nb: Notebook): Promise<void> {
   editor.removeVirtualTextsByPrefix(buf, NS_PAD);
   editor.clearConcealNamespace(buf, NS_MD);
   editor.clearNamespace(buf, NS_MD);
+  editor.clearFolds(buf);
+  nb.spans = spans;
+  const cursor = editor.getActiveBufferId() === buf ? editor.getCursorPosition() : -1;
+  nb.cursorCell = markdownCellAt(spans, cursor);
+  const typeset = new Map<number, { cell: string; lines: MdLine[]; rowPx: number }>();
+  nb.typeset = typeset;
+  // the line number of each line start, for the typeset cells' markers
+  const lineNo = new Map<number, number>();
   // each line's text by its start (bytes), for the markdown cells
   const lineAt = new Map<number, string>();
   let at = 0;
   for (const line of text.split("\n")) {
+    lineNo.set(at, lineNo.size);
     lineAt.set(at, line);
     at += bytes(line) + 1;
   }
@@ -1113,7 +1236,23 @@ async function decorate(nb: Notebook): Promise<void> {
       s.lineStarts.forEach((p, k) =>
         editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, textStart(p), "  ", { bg: "ui.notebook_cell_bg" }, true));
     }
-    if (s.cell.kind === "markdown") renderMarkdown(nb, buf, s, lineAt);
+    if (s.cell.kind === "markdown") {
+      // typeset, unless the cursor is in it (its source then, to edit): the source folds away under
+      // the `# %%` rule, the page's rows hang under that
+      const md = s.markerEnd > s.start && nb.cursorCell !== s.cell.id ? cellMarkdown(s, lineAt) : null;
+      const page = md ? cellPage(nb, s, md.md) : null;
+      if (md && page && page.tiles.length && s.lastEnd + 1 <= at) {
+        // (a fold always shows a mark after its first line: a pencil, the cell is there to edit)
+        editor.addFold(buf, s.markerEnd + 1, s.lastEnd + 1, "✎");
+        let row = 0;
+        for (const img of page.tiles) {
+          const fg = imageFg(img.id);
+          for (let k = 0; k < img.rows; k++, row++)
+            editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg }, false, NS_OUT, 100 + row);
+        }
+        typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
+      } else renderMarkdown(nb, buf, s, lineAt);
+    }
     if (s.cell.kind === "code") {
       for (const p of s.lineStarts) {
         const line = lineAt.get(p) ?? "";
@@ -1144,7 +1283,43 @@ async function decorate(nb: Notebook): Promise<void> {
         false, NS_OUT, j + 1));
   });
   dropStaleImages();
+  dropStalePages();
 }
+
+/** The id of the markdown cell holding `pos` (its `# %%` line included), if any. */
+function markdownCellAt(spans: Span[], pos: number): string | null {
+  const s = spans.find((s) => s.start <= pos && pos <= s.end);
+  return s?.cell.kind === "markdown" ? s.cell.id : null;
+}
+
+// the cursor going into a typeset markdown cell shows its source, and leaving it typesets it
+registerHandler("notebook_cursor_moved", (e: { buffer_id: number; new_position: number }) => {
+  for (const nb of byCopy.values()) {
+    if (nb.bufferId !== e.buffer_id || !nb.spans) continue;
+    if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb);
+  }
+});
+editor.on("cursor_moved", "notebook_cursor_moved");
+
+// a click on a typeset cell: the cursor goes to the markdown under it
+registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
+  if (e.button !== "left" || e.virtual_row === null || e.buffer_row === null) return;
+  const nb = [...byCopy.values()].find((n) => n.bufferId === e.buffer_id);
+  const hit = nb?.typeset?.get(e.buffer_row);
+  if (!nb || !hit) return;
+  const [cw] = cellPixels();
+  const r = await ask(nb, "mdjump", {
+    id: `cell:${hit.cell}`,
+    x: Math.max(0, (e.virtual_col ?? 3) - 3 + 0.5) * cw * PAGE_DENSITY,
+    y: (e.virtual_row + 0.5) * hit.rowPx,
+  });
+  const offset = typeof r.offset === "number" ? r.offset : 0;
+  let line = hit.lines[0];
+  for (const l of hit.lines) if (l.md <= offset) line = l;
+  if (!line || nb.bufferId === null) return;
+  editor.setBufferCursor(nb.bufferId, line.buf + offset - line.md);
+});
+editor.on("mouse_click", "notebook_page_click");
 
 // ── opening, saving, closing ─────────────────────────────────────────
 

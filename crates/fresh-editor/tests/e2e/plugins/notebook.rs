@@ -141,6 +141,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with open(os.path.join(os.path.dirname(notebook), "topng.json"), "w") as f:
                     json.dump(req, f)
                 body.update({"png": PNG, "width": 80, "height": 48})
+            elif url.path == "/md" and "Typeset" in req["text"]:
+                # a page of two tiles: 3 rows (at 8x16 cells, drawn at twice that)
+                with open(os.path.join(os.path.dirname(notebook), "md.json"), "w") as f:
+                    json.dump(req, f)
+                row = req["row_px"]
+                body.update(width=req["width_px"], height=3 * row, tiles=[
+                    {"hash": "a", "height": 2 * row, "png": PNG}, {"hash": "b", "height": row, "png": PNG}])
+            elif url.path == "/mdjump":
+                with open(os.path.join(os.path.dirname(notebook), "md.json")) as f:
+                    body["offset"] = json.load(f)["text"].encode().find(b"words")
             elif url.path == "/clear":
                 with open(os.path.join(os.path.dirname(notebook), "cleared.json"), "w") as f:
                     json.dump(req, f)
@@ -1013,6 +1023,66 @@ fn input_is_asked_in_a_prompt() {
     h.type_text("Ada").unwrap();
     h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
     h.wait_until(|h| h.screen_to_string().contains("hi Ada"))
+        .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+/// A markdown cell the cursor isn't in shows typeset (nb's page, as image rows, its source folded
+/// away); a click on the page puts the cursor on the markdown under it, and the source shows.
+#[test]
+fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("doc.ipynb");
+    fs::write(
+        &nb_path,
+        NOTEBOOK.replace(
+            r##""source": ["# Report"]"##,
+            r##""source": ["# Typeset\n", "\n", "Some words here."]"##,
+        ),
+    )
+    .unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    // the cursor starts in the markdown cell: its source
+    h.wait_until(|h| h.screen_to_string().contains("# Some words here."))
+        .unwrap();
+    // in the code cell, the markdown one is typeset: three image rows under its rule, no source
+    h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        !s.contains("Some words") && s.lines().filter(|l| l.contains('\u{10EEEE}')).count() == 3
+    })
+    .unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("md.json")).unwrap()).unwrap();
+    assert_eq!(
+        req["text"], "# Typeset\n\nSome words here.\n",
+        "the cell's markdown, without its `# `"
+    );
+
+    // a click on the page's second row: the cursor goes to "words", in the source
+    let screen = h.screen_to_string();
+    let row = screen
+        .lines()
+        .position(|l| l.contains('\u{10EEEE}'))
+        .unwrap() as u16
+        + 1;
+    h.mouse_click(20, row).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("# Some words here."))
+        .unwrap();
+    // (typing there shows where it is)
+    h.type_text("X").unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("# Some Xwords here."))
         .unwrap();
     h.assert_no_plugin_errors();
 }

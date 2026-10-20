@@ -71,6 +71,13 @@ interface MouseClickHookArgs {
 	buffer_row: number | null;
 	/** 0-indexed byte column inside the buffer row. */
 	buffer_col: number | null;
+	/**
+	* On a plugin's virtual line: which of the virtual rows below
+	* `buffer_row` it is (0 = the first); `null` on the buffer's own text.
+	*/
+	virtual_row: number | null;
+	/** And the column in it, from the text area's left edge (past the gutter). */
+	virtual_col: number | null;
 }
 /**
 * Registry of typed plugin APIs surfaced through
