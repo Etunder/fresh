@@ -720,6 +720,7 @@ impl Editor {
                 text_overlays,
                 epoch,
                 compose_only,
+                clip,
             } => {
                 self.handle_add_virtual_line(
                     buffer_id,
@@ -735,6 +736,7 @@ impl Editor {
                     text_overlays,
                     epoch,
                     compose_only,
+                    clip,
                 );
             }
             PluginCommand::ClearVirtualTextNamespace {

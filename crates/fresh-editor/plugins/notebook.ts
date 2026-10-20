@@ -46,6 +46,7 @@ const MAX_OUTPUT_LINES = 40;
 const NS_OUT = "notebook-out";
 const NS_RULE = "notebook-rule";
 const NS_CELL = "notebook-cell";
+const NS_PAD = "notebook-pad:";
 
 type Cell = { id: string; kind: string; source: string };
 type Output = Record<string, unknown>;
@@ -121,7 +122,17 @@ export function cellsToText(cells: Cell[]): string {
     .join("\n");
 }
 
-type Span = { cell: Cell; start: number; markerEnd: number; lastLine: number; lastEnd: number; end: number; hasId: boolean };
+type Span = {
+  cell: Cell;
+  start: number;
+  markerEnd: number;
+  lastLine: number;
+  lastEnd: number;
+  end: number;
+  hasId: boolean;
+  /** Where each line of the source starts (bytes), up to the last one with text. */
+  lineStarts: number[];
+};
 
 /** The cells of percent-format text, with where each sits (byte offsets). */
 export function textToCells(text: string): Span[] {
@@ -136,6 +147,7 @@ export function textToCells(text: string): Span[] {
     if (body.length && body[body.length - 1] === "") body = body.slice(0, -1);
     if (current.span.cell.kind !== "code") body = body.map((l) => l.replace(/^# ?/, ""));
     current.span.cell.source = body.join("\n");
+    current.span.lineStarts = current.span.lineStarts.filter((p) => p <= current!.span.lastLine);
     spans.push(current.span);
   };
   lines.forEach((line) => {
@@ -152,11 +164,13 @@ export function textToCells(text: string): Span[] {
           lastEnd: lineEnd,
           end: lineEnd,
           hasId: m[2] !== undefined,
+          lineStarts: [],
         },
         body: [],
       };
     } else if (current) {
       current.body.push(line);
+      current.span.lineStarts.push(offset);
       // outputs hang under the cell's last line with text (the line at the very end of the file
       // draws no virtual lines)
       if (line.trim() !== "") {
@@ -167,7 +181,7 @@ export function textToCells(text: string): Span[] {
     } else if (line.trim() !== "") {
       // text before the first marker: a code cell of its own
       current = {
-        span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false },
+        span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false, lineStarts: [offset] },
         body: [line],
       };
     }
@@ -510,6 +524,7 @@ async function decorate(nb: Notebook): Promise<void> {
   editor.clearVirtualTextNamespace(buf, NS_OUT);
   editor.clearConcealNamespace(buf, NS_RULE);
   editor.clearNamespace(buf, NS_CELL);
+  editor.removeVirtualTextsByPrefix(buf, NS_PAD);
   spans.forEach((s, i) => {
     const r = nb.runs.get(s.cell.id);
     // the `# %%` line as a quiet rule: cell number, kind, run count and state (herdr's muted
@@ -527,6 +542,14 @@ async function decorate(nb: Notebook): Promise<void> {
     const bodyStart = s.markerEnd > s.start ? s.markerEnd + 1 : s.start;
     if (s.cell.kind === "code" && s.lastEnd > bodyStart) {
       editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
+      // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
+      // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
+      const band = { fg: "ui.notebook_cell_bg", clip: true };
+      editor.addVirtualLine(buf, bodyStart, "▄".repeat(500), band, true, NS_OUT, -1);
+      editor.addVirtualLine(buf, s.lastLine, "▀".repeat(500), band, false, NS_OUT, -2);
+      // and two columns of it before each line
+      s.lineStarts.forEach((p, k) =>
+        editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, p, "  ", { bg: "ui.notebook_cell_bg" }, true));
     }
     if (!r || s.cell.kind !== "code") return;
     // long text output is cut; image rows are never (half a plot helps nobody)
@@ -540,10 +563,9 @@ async function decorate(nb: Notebook): Promise<void> {
     });
     if (more) out.push({ text: `… ${more} more lines`, fg: "editor.line_number_fg" });
     if (!out.length) return;
-    // a blank row between the cell and its outputs, so the two don't run together
-    editor.addVirtualLine(buf, s.lastLine, "", { fg: "editor.fg" }, false, NS_OUT, 0);
     out.forEach((l, j) =>
-      editor.addVirtualLine(buf, s.lastLine, "  " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined },
+      // three columns in, level with the cell's code (its two-column margin plus the inlay space)
+      editor.addVirtualLine(buf, s.lastLine, "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined },
         false, NS_OUT, j + 1));
   });
   dropStaleImages();
@@ -563,6 +585,7 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
   const copyOf = byCopy.get(e.path);
   if (copyOf) {
     copyOf.bufferId = e.buffer_id;
+    editor.setLineNumbersDefault(e.buffer_id, false);
     showKernel(copyOf);
     if (copyOf.jsonBuffer !== null) editor.closeBuffer(copyOf.jsonBuffer, true);
     copyOf.jsonBuffer = null;

@@ -4428,6 +4428,10 @@ pub enum PluginCommand {
         /// rendering (markdown compose's frames, rendered blocks).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         compose_only: bool,
+        /// Keep the line on one row, cut at the pane's edge, instead of
+        /// soft-wrapping it (a rule or band drawn the width of the pane).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        clip: bool,
     },
 
     /// Clear all virtual texts in a namespace

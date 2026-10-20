@@ -246,6 +246,9 @@ The `options` object accepts:
     `fg`/`bg`. Falls back to the theme's line-number fg.
   * `composeOnly` — `true` draws the line only in a pane showing the
     buffer in compose view, and hides it in every other pane.
+  * `clip` — `true` keeps the line on one row, cut at the pane's
+    edge, instead of soft-wrapping it: for a rule or a band drawn
+    the width of the pane (give it more text than any pane is wide).
 
 ```typescript
 addVirtualLine(bufferId: number, position: number, text: string, options: Record<string, unknown>, above: boolean, namespace: string, priority: number): boolean;

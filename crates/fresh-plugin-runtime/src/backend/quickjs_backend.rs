@@ -5613,6 +5613,9 @@ impl JsEditorApi {
     ///     `fg`/`bg`. Falls back to the theme's line-number fg.
     ///   * `composeOnly` — `true` draws the line only in a pane showing the
     ///     buffer in compose view, and hides it in every other pane.
+    ///   * `clip` — `true` keeps the line on one row, cut at the pane's
+    ///     edge, instead of soft-wrapping it: for a rule or a band drawn
+    ///     the width of the pane (give it more text than any pane is wide).
     ///
     /// @param position - Byte position to anchor the virtual line to
     /// @param above - Whether to insert above (true) or below (false) the line
@@ -5657,6 +5660,7 @@ impl JsEditorApi {
             .filter(|s| !s.is_empty());
         let gutter_color = parse_color_spec("gutterColor", &options);
         let compose_only: bool = options.get("composeOnly").unwrap_or(false);
+        let clip: bool = options.get("clip").unwrap_or(false);
         // The buffer version `position` was computed against: the epoch of the
         // hook this handler is running in, auto-stamped by the runtime. Lets the
         // editor remap a stale anchor forward before placing the line.
@@ -5701,6 +5705,7 @@ impl JsEditorApi {
                 text_overlays,
                 epoch,
                 compose_only,
+                clip,
             })
             .is_ok())
     }

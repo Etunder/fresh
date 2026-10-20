@@ -163,6 +163,9 @@ pub struct VirtualText {
     /// line suppressed in the token stream but not in the wrap index makes
     /// the index describe rows the renderer never draws.
     pub compose_only: bool,
+    /// A virtual line kept on one row, cut at the pane's edge, instead of
+    /// soft-wrapped. Always false for inline virtual text.
+    pub clip: bool,
 }
 
 impl VirtualText {
@@ -296,6 +299,7 @@ impl VirtualTextManager {
             gutter_color: None,
             text_overlays: Vec::new(),
             compose_only: false,
+            clip: false,
         })
     }
 
@@ -350,6 +354,7 @@ impl VirtualTextManager {
             gutter_color: None,
             text_overlays: Vec::new(),
             compose_only: false,
+            clip: false,
         })
     }
 
@@ -385,6 +390,7 @@ impl VirtualTextManager {
             gutter_color: None,
             text_overlays: Vec::new(),
             compose_only: false,
+            clip: false,
         })
     }
 
@@ -428,6 +434,7 @@ impl VirtualTextManager {
             gutter_color: None,
             text_overlays: Vec::new(),
             compose_only,
+            clip: false,
         })
     }
 
@@ -468,6 +475,7 @@ impl VirtualTextManager {
             None,
             Vec::new(),
             false,
+            false,
         )
     }
 
@@ -494,6 +502,7 @@ impl VirtualTextManager {
         gutter_color: Option<Color>,
         text_overlays: Vec<fresh_core::api::VirtualLineTextOverlay>,
         compose_only: bool,
+        clip: bool,
     ) -> VirtualTextId {
         debug_assert!(
             placement.is_line(),
@@ -518,6 +527,7 @@ impl VirtualTextManager {
             gutter_color,
             text_overlays,
             compose_only,
+            clip,
         })
     }
 
@@ -1057,6 +1067,7 @@ mod tests {
                     None,
                     None,
                     Vec::new(),
+                    false,
                     false,
                 );
             }),

@@ -591,7 +591,7 @@ pub(super) fn inject_virtual_lines(
                         result.extend(create_wrapped_virtual_lines(
                             &vtext.text,
                             vtext.resolved_style(theme),
-                            wrap_width,
+                            if vtext.clip { None } else { wrap_width },
                             glyph,
                             &vtext.text_overlays,
                         ));
@@ -618,7 +618,7 @@ pub(super) fn inject_virtual_lines(
                         result.extend(create_wrapped_virtual_lines(
                             &vtext.text,
                             vtext.resolved_style(theme),
-                            wrap_width,
+                            if vtext.clip { None } else { wrap_width },
                             glyph,
                             &vtext.text_overlays,
                         ));

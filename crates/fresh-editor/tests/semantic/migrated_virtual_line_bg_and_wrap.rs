@@ -143,10 +143,13 @@ fn anti_virtual_line_without_bg_has_no_red_trailing_cell() {
     // Anti: inject the SAME `DELETED` virtual line but with NO bg
     // (fg only). The trailing cell at column 60 of the DELETED row
     // must then carry the theme's default content background
-    // (Rgb(20,20,20)), NOT the red fill — proving the red stripe
+    // (Rgb(0,0,0)), NOT the red fill — proving the red stripe
     // is gated on the virtual line actually carrying a bg style,
     // not on the line's mere presence.
-    let theme_default_bg = (20u8, 20u8, 20u8);
+    // The content background (the test theme's editor.bg). It used to be the
+    // current-line bg: a virtual line inherited the highlight of the cursor's
+    // line above it, which it no longer does.
+    let theme_default_bg = (0u8, 0u8, 0u8);
     let scenario = LayoutScenario {
         description: "anti: virtual line with no bg ⇒ col 60 of DELETED row is theme-default bg"
             .into(),

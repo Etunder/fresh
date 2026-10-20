@@ -6790,6 +6790,9 @@ interface EditorAPI {
 	*     `fg`/`bg`. Falls back to the theme's line-number fg.
 	*   * `composeOnly` — `true` draws the line only in a pane showing the
 	*     buffer in compose view, and hides it in every other pane.
+	*   * `clip` — `true` keeps the line on one row, cut at the pane's
+	*     edge, instead of soft-wrapping it: for a rule or a band drawn
+	*     the width of the pane (give it more text than any pane is wide).
 	* 
 	* @param position - Byte position to anchor the virtual line to
 	* @param above - Whether to insert above (true) or below (false) the line
