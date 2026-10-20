@@ -1508,6 +1508,7 @@
   "settings.option.clock": "นาฬิกา",
   "settings.option.remote": "ตัวบ่งชี้ระยะไกล",
   "settings.option.trust": "ความเชื่อถือพื้นที่ทำงาน",
+  "settings.option.mode": "โหมด",
   "settings.editing_config": "กำลังแก้ไขคอนфิก %{layer}: %{path}",
   "settings.failed_to_apply": "ใช้การตั้งค่าไม่สำเร็จ: %{error}",
   "settings.failed_to_open": "เปิดการตั้งค่าไม่สำเร็จ: %{error}",

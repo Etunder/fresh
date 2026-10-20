@@ -1520,6 +1520,7 @@
   "settings.option.clock": "Годинник",
   "settings.option.remote": "Віддалений доступ",
   "settings.option.trust": "Довіра робочій області",
+  "settings.option.mode": "Режим",
   "settings.editing_config": "Редагування конфігурації %{layer}: %{path}",
   "settings.failed_to_apply": "Не вдалося застосувати налаштування: %{error}",
   "settings.failed_to_open": "Не вдалося відкрити налаштування: %{error}",

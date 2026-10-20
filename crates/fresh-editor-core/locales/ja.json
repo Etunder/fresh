@@ -1508,6 +1508,7 @@
   "settings.option.clock": "時計",
   "settings.option.remote": "リモートインジケータ",
   "settings.option.trust": "ワークスペースの信頼",
+  "settings.option.mode": "モード",
   "settings.editing_config": "%{layer} 設定を編集中: %{path}",
   "settings.failed_to_apply": "設定の適用に失敗: %{error}",
   "settings.failed_to_open": "設定を開くのに失敗: %{error}",

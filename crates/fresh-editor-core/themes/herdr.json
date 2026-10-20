@@ -37,6 +37,11 @@
     "after_eof_bg": "Default"
   },
   "ui": {
+    "explorer_title_fg": [122, 162, 247],
+    "explorer_title_bg": "Default",
+    "explorer_border_fg": [122, 162, 247],
+    "explorer_toggle_fg": [122, 162, 247],
+    "explorer_directory_fg": [192, 202, 245],
     "tab_active_fg": [26, 27, 38],
     "tab_active_bg": [122, 162, 247],
     "tab_inactive_fg": [86, 95, 137],

@@ -64,7 +64,9 @@ default. Layout changes are behind `editor.chrome_style: "herdr"` (default `"fre
 `herdr-defaults.json`), so Fresh's own layout and tests stay intact. Done so far: tab chips with the
 close mark on hover, the status bar's ` · ` separators and accent key hint, the `{mode}` badge
 (`EDIT`, `TERMINAL`, `EXPLORER`, `PROMPT`, `NOTEBOOK`, …) at the left of the status bar, the hidden
-menu bar, quiet scrollbars.
+menu bar, quiet scrollbars, and the explorer as herdr's sidebar (accent border and title when
+focused, `▸ ▾` toggles in accent, folder names in plain text, through the `ui.explorer_*` theme
+keys), with no italics on the preview tab.
 
 ## Feel (decided with the team)
 

@@ -223,7 +223,8 @@ fn tab_ink(s: &Strip, i: usize) -> (String, String) {
     } else {
         ("ui.tab_inactive_fg", "ui.tab_inactive_bg", vec![])
     };
-    if t.preview {
+    // herdr has no italics: there the "preview" word alone marks the tab.
+    if t.preview && !s.herdr {
         a.push("italic");
     }
     let name = attrs(fg, bg, &a);

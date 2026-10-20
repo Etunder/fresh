@@ -1512,6 +1512,7 @@
   "settings.option.clock": "Reloj",
   "settings.option.remote": "Indicador remoto",
   "settings.option.trust": "Confianza del espacio de trabajo",
+  "settings.option.mode": "Modo",
   "settings.editing_config": "Editando configuración de %{layer}: %{path}",
   "settings.failed_to_apply": "Error al aplicar configuración: %{error}",
   "settings.failed_to_open": "Error al abrir configuración: %{error}",

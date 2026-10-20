@@ -1512,6 +1512,7 @@
   "settings.option.clock": "Uhr",
   "settings.option.remote": "Remote-Indikator",
   "settings.option.trust": "Arbeitsbereich-Vertrauen",
+  "settings.option.mode": "Modus",
   "settings.editing_config": "%{layer}-Konfiguration bearbeiten: %{path}",
   "settings.failed_to_apply": "Einstellungen konnten nicht angewendet werden: %{error}",
   "settings.failed_to_open": "Einstellungen konnten nicht geöffnet werden: %{error}",

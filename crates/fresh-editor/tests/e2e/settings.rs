@@ -497,11 +497,11 @@ fn test_settings_selection_indicator() {
     harness.render().unwrap();
 
     // Settings panel should show focus indicator ">" on selected item
-    // General category has: Orchestrator Mode (first item)
+    // General category has: Check For Updates (first item)
     // Format: ">  " (3-char indicator area: focus, modified, space)
     let screen = harness.screen_to_string();
     assert!(
-        screen.contains(">  Orchestrator Mode"),
+        screen.contains(">  Check For Updates"),
         "Focus indicator '>' should appear before focused item in settings panel. Screen:\n{}",
         screen
     );
@@ -3995,14 +3995,14 @@ fn test_usability_backtab_backward_navigation() {
     // Start in the tree. Tab enters the body at its selected card.
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
-    harness.assert_screen_contains(">  Orchestrator Mode");
+    harness.assert_screen_contains(">  Check For Updates");
 
     // Shift+Tab from the first card goes back to the tree.
     harness
         .send_key(KeyCode::BackTab, KeyModifiers::SHIFT)
         .unwrap();
     harness.render().unwrap();
-    harness.assert_screen_not_contains(">  Orchestrator Mode");
+    harness.assert_screen_not_contains(">  Check For Updates");
 
     // Shift+Tab from the tree wraps the ring to its last stop, Cancel, and
     // walks the footer backwards from there: Save, Reset, Layer, Edit.
@@ -4026,7 +4026,7 @@ fn test_usability_backtab_backward_navigation() {
         .unwrap();
     harness.render().unwrap();
     harness.assert_screen_not_contains(">[ Edit ]");
-    harness.assert_screen_contains(">  Orchestrator Mode");
+    harness.assert_screen_contains(">  Check For Updates");
 
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
 }

@@ -723,6 +723,21 @@ pub struct UiColors {
     /// Command palette shortcut hint background in status bar (falls back to status_bar_bg)
     #[serde(default)]
     pub status_palette_bg: Option<StyledColorDef>,
+    /// File explorer title text while focused (falls back to editor.bg)
+    #[serde(default)]
+    pub explorer_title_fg: Option<StyledColorDef>,
+    /// File explorer title background while focused (falls back to editor.fg)
+    #[serde(default)]
+    pub explorer_title_bg: Option<StyledColorDef>,
+    /// File explorer border while focused (falls back to editor.cursor)
+    #[serde(default)]
+    pub explorer_border_fg: Option<StyledColorDef>,
+    /// File explorer folder open/closed glyph (falls back to diagnostic.warning_fg)
+    #[serde(default)]
+    pub explorer_toggle_fg: Option<StyledColorDef>,
+    /// File explorer folder names (falls back to syntax.keyword)
+    #[serde(default)]
+    pub explorer_directory_fg: Option<StyledColorDef>,
     /// Status bar separator glyph text color (falls back to status_bar_fg)
     #[serde(default)]
     pub status_separator_fg: Option<StyledColorDef>,
@@ -1144,6 +1159,12 @@ pub struct Theme {
 
     pub status_bar_fg: Color,
     pub status_bar_bg: Color,
+    /// File explorer chrome (default: Fresh's own look)
+    pub explorer_title_fg: Color,
+    pub explorer_title_bg: Color,
+    pub explorer_border_fg: Color,
+    pub explorer_toggle_fg: Color,
+    pub explorer_directory_fg: Color,
     /// Status bar palette shortcut hint colors (default: same as status bar)
     pub status_palette_fg: Color,
     pub status_palette_bg: Color,
@@ -1409,6 +1430,11 @@ impl From<ThemeFile> for Theme {
             menu_disabled_bg: styled_color(&file.ui.menu_disabled_bg),
             status_bar_fg: styled_color(&file.ui.status_bar_fg),
             status_bar_bg: styled_color(&file.ui.status_bar_bg),
+            explorer_title_fg: styled_color(&file.ui.explorer_title_fg),
+            explorer_title_bg: styled_color(&file.ui.explorer_title_bg),
+            explorer_border_fg: styled_color(&file.ui.explorer_border_fg),
+            explorer_toggle_fg: styled_color(&file.ui.explorer_toggle_fg),
+            explorer_directory_fg: styled_color(&file.ui.explorer_directory_fg),
             status_palette_fg: styled_color(&file.ui.status_palette_fg),
             status_palette_bg: styled_color(&file.ui.status_palette_bg),
             status_separator_fg: styled_color(&file.ui.status_separator_fg),
@@ -1590,6 +1616,11 @@ impl From<Theme> for ThemeFile {
                 menu_disabled_bg: styled(&theme, "ui.menu_disabled_bg"),
                 status_bar_fg: styled(&theme, "ui.status_bar_fg"),
                 status_bar_bg: styled(&theme, "ui.status_bar_bg"),
+                explorer_title_fg: styled(&theme, "ui.explorer_title_fg"),
+                explorer_title_bg: styled(&theme, "ui.explorer_title_bg"),
+                explorer_border_fg: styled(&theme, "ui.explorer_border_fg"),
+                explorer_toggle_fg: styled(&theme, "ui.explorer_toggle_fg"),
+                explorer_directory_fg: styled(&theme, "ui.explorer_directory_fg"),
                 status_palette_fg: styled(&theme, "ui.status_palette_fg"),
                 status_palette_bg: styled(&theme, "ui.status_palette_bg"),
                 status_separator_fg: styled(&theme, "ui.status_separator_fg"),
@@ -2327,6 +2358,11 @@ theme_color_keys! {
         "blame_header_bg" => color blame_header_bg fallback "ui.menu_bg",
         "blame_header_fg" => color blame_header_fg fallback "ui.menu_fg",
         "compose_margin_bg" => color compose_margin_bg fallback "editor.after_eof_bg",
+        "explorer_border_fg" => color explorer_border_fg fallback "editor.cursor",
+        "explorer_directory_fg" => color explorer_directory_fg fallback "syntax.keyword",
+        "explorer_title_bg" => color explorer_title_bg fallback "editor.fg",
+        "explorer_title_fg" => color explorer_title_fg fallback "editor.bg",
+        "explorer_toggle_fg" => color explorer_toggle_fg fallback "diagnostic.warning_fg",
         "file_status_added_fg" => color file_status_added_fg fallback "diagnostic.info_fg",
         "file_status_conflicted_fg" => color file_status_conflicted_fg fallback "diagnostic.error_fg",
         "file_status_deleted_fg" => color file_status_deleted_fg fallback "diagnostic.error_fg",

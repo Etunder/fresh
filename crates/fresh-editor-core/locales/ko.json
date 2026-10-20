@@ -1508,6 +1508,7 @@
   "settings.option.clock": "시계",
   "settings.option.remote": "원격 표시기",
   "settings.option.trust": "워크스페이스 신뢰",
+  "settings.option.mode": "모드",
   "settings.editing_config": "%{layer} 설정 편집 중: %{path}",
   "settings.failed_to_apply": "설정 적용 실패: %{error}",
   "settings.failed_to_open": "설정 열기 실패: %{error}",
