@@ -62,7 +62,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif url.path == "/run":
                 count[0] += 1
                 if count[0] == 1:
-                    emit({"event": "kernel", "state": "starting", "name": "Python 3 (ipykernel)"})
+                    emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
                 emit({"event": "output", "cell": req["cell"],
@@ -160,7 +160,7 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     // the mode badge and the kernel's state dot, herdr's way
     h.wait_until(|h| {
         h.get_status_bar()
-            .starts_with(" NOTEBOOK   ● Python 3 idle")
+            .starts_with(" NOTEBOOK   ● Python (.venv) idle")
     })
     .unwrap();
 

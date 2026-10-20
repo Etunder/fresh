@@ -251,8 +251,7 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
       return;
     case "kernel":
       nb.kernel = e.state as string;
-      // "Python 3 (ipykernel)" reads as "Python 3" on the bar
-      if (typeof e.name === "string") nb.kernelName = e.name.replace(/\s*\(.*\)$/, "");
+      if (typeof e.name === "string") nb.kernelName = shortKernelName(e.name);
       if (e.state === "starting") editor.setStatus(`notebook: starting ${e.name ?? "the kernel"}…`);
       else if (e.state === "ready") editor.setStatus("notebook: kernel ready");
       else if (e.state === "dead") editor.setStatus(`notebook: the kernel stopped${e.message ? ": " + String(e.message).split("\n")[0] : ""}`);
@@ -305,6 +304,17 @@ function kernelBadge(nb: Notebook): string {
     default:
       return "○ no kernel yet";
   }
+}
+
+/** A kernel name short enough for the bar: "Python 3 (ipykernel)" reads as "Python 3", and a repo
+ *  venv's interpreter path (nb names those by path) as "Python (.venv)". */
+function shortKernelName(name: string): string {
+  if (/[\\/]/.test(name)) {
+    const parts = name.split(/[\\/]+/).filter((p) => p);
+    const bin = parts.findIndex((p) => /^(bin|scripts)$/i.test(p));
+    return bin > 0 ? `Python (${parts[bin - 1]})` : "Python";
+  }
+  return name.replace(/\s*\(.*\)$/, "");
 }
 
 function showKernel(nb: Notebook): void {
