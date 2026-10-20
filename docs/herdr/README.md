@@ -27,3 +27,14 @@ in WezTerm on Windows, so the fork:
 Upstream's release, packaging and publishing workflows are removed. To take upstream changes, merge
 `sinelaw/fresh` `master` into this fork's `master`; the fork's own changes stay in their own
 commits so conflicts are easy to read.
+
+## Screenshots
+
+| upstream Fresh | herdr edition |
+|---|---|
+| ![upstream](screenshots/upstream-fresh.png) | ![herdr look](screenshots/herdr-look.png) |
+
+A notebook, after running its cells and saving:
+
+![notebook](screenshots/notebook.png)
+
