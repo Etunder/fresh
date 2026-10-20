@@ -10,6 +10,7 @@
     "status_bar": {
       "left": [
         "{mode}",
+        "{notebook:kernel}",
         "{trust}",
         "{terminal_restart}",
         "{cursor}",

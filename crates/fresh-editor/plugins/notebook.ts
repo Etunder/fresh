@@ -41,6 +41,8 @@ type Notebook = {
   stdout: string;
   runs: Map<string, Run>;
   kernel: string;
+  /** The kernel's display name, from its `starting` event. */
+  kernelName: string;
   seq: number;
   ready: Promise<void>;
   markReady: () => void;
@@ -186,6 +188,7 @@ function start(ipynb: string): Notebook {
     stdout: "",
     runs: new Map(),
     kernel: "",
+    kernelName: "",
     seq: 0,
     ready,
     markReady,
@@ -248,6 +251,8 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
       return;
     case "kernel":
       nb.kernel = e.state as string;
+      // "Python 3 (ipykernel)" reads as "Python 3" on the bar
+      if (typeof e.name === "string") nb.kernelName = e.name.replace(/\s*\(.*\)$/, "");
       if (e.state === "starting") editor.setStatus(`notebook: starting ${e.name ?? "the kernel"}…`);
       else if (e.state === "ready") editor.setStatus("notebook: kernel ready");
       else if (e.state === "dead") editor.setStatus(`notebook: the kernel stopped${e.message ? ": " + String(e.message).split("\n")[0] : ""}`);
@@ -277,7 +282,33 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
       if (cell) run(nb, cell).state = "error";
       break;
   }
+  showKernel(nb);
   void decorate(nb);
+}
+
+// ── the status bar's kernel token ────────────────────────────────────
+
+editor.registerStatusBarElement("kernel", "Notebook kernel");
+
+/** herdr's state dots: `● python3 idle`, `● python3 busy`, `○` while there is no kernel. */
+function kernelBadge(nb: Notebook): string {
+  const name = nb.kernelName || "kernel";
+  switch (nb.kernel) {
+    case "starting":
+      return `◐ ${name} starting`;
+    case "ready": {
+      const busy = [...nb.runs.values()].some((r) => r.state === "busy");
+      return `● ${name} ${busy ? "busy" : "idle"}`;
+    }
+    case "dead":
+      return `○ ${name} stopped`;
+    default:
+      return "○ no kernel yet";
+  }
+}
+
+function showKernel(nb: Notebook): void {
+  if (nb.bufferId !== null) editor.setStatusBarValue(nb.bufferId, "kernel", kernelBadge(nb));
 }
 
 // ── drawing ──────────────────────────────────────────────────────────
@@ -354,6 +385,7 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
   const copyOf = byCopy.get(e.path);
   if (copyOf) {
     copyOf.bufferId = e.buffer_id;
+    showKernel(copyOf);
     if (copyOf.jsonBuffer !== null) editor.closeBuffer(copyOf.jsonBuffer, true);
     copyOf.jsonBuffer = null;
     followMode();

@@ -7,7 +7,7 @@
 
 use crate::common::harness::{copy_plugin, copy_plugin_lib, EditorTestHarness};
 use crossterm::event::{KeyCode, KeyModifiers};
-use fresh::config::{Config, PluginConfig};
+use fresh::config::{Config, PluginConfig, StatusBarElement};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -61,6 +61,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 body["runs"] = {}
             elif url.path == "/run":
                 count[0] += 1
+                if count[0] == 1:
+                    emit({"event": "kernel", "state": "starting", "name": "Python 3 (ipykernel)"})
+                    emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
                 emit({"event": "output", "cell": req["cell"],
                       "output": {"output_type": "stream", "name": "stdout", "text": "ran: " + req["code"] + "\n"}})
@@ -95,6 +98,10 @@ fn harness(project: &Path, fake_nb: &Path) -> EditorTestHarness {
     copy_plugin(&plugins_dir, "notebook");
     copy_plugin_lib(&plugins_dir);
     let mut config = Config::default();
+    config.editor.status_bar.left = vec![
+        StatusBarElement::Mode,
+        StatusBarElement::CustomToken("notebook:kernel".to_string()),
+    ];
     config.plugins.insert(
         "notebook".to_string(),
         PluginConfig {
@@ -124,12 +131,14 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     let mut h = harness(&project, &fake_nb);
     h.open_file(&nb_path).unwrap();
 
-    // the cells, not the JSON; the `# %%` lines drawn as rules
+    // the cells, not the JSON; the `# %%` lines drawn as rules; no kernel until the first run
     h.wait_until(|h| {
         let s = h.screen_to_string();
         s.contains("print('hello')") && s.contains("── 2 [ ]")
     })
     .unwrap();
+    h.wait_until(|h| h.get_status_bar().contains("○ no kernel yet"))
+        .unwrap();
     let screen = h.screen_to_string();
     assert!(
         !screen.contains("nbformat"),
@@ -148,6 +157,9 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         s.contains("ran: print('hello')") && s.contains("── 2 [1] ✓")
     })
     .unwrap();
+    // the mode badge and the kernel's state dot, herdr's way
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK   ● Python 3 idle"))
+        .unwrap();
 
     // saving the working copy sends the cells, with their ids, to nb
     h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
