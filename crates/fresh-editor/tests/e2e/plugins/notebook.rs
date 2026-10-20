@@ -67,7 +67,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
-                if req["code"].startswith("table"):
+                if req["code"].startswith("noisy"):
+                    text = "\x1b[31mfailed\x1b[0m twice\n" + "".join(f"\r{p}%" for p in (10, 50, 100)) + "\n"
+                    text += "".join(f"line {k}\n" for k in range(50))
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "stream", "name": "stdout", "text": text}})
+                elif req["code"].startswith("table"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
                                      "data": {"text/plain": "   fund  ret\n0  Alpha  1.5", "text/html":
@@ -141,6 +146,10 @@ fn python3_available() -> bool {
 }
 
 fn harness(project: &Path, fake_nb: &Path) -> EditorTestHarness {
+    harness_sized(project, fake_nb, 40)
+}
+
+fn harness_sized(project: &Path, fake_nb: &Path, rows: u16) -> EditorTestHarness {
     let plugins_dir = project.join("plugins");
     fs::create_dir_all(&plugins_dir).unwrap();
     copy_plugin(&plugins_dir, "notebook");
@@ -158,7 +167,8 @@ fn harness(project: &Path, fake_nb: &Path) -> EditorTestHarness {
             settings: serde_json::json!({ "nbCommand": fake_nb.to_str().unwrap() }),
         },
     );
-    EditorTestHarness::with_config_and_working_dir(120, 40, config, project.to_path_buf()).unwrap()
+    EditorTestHarness::with_config_and_working_dir(120, rows, config, project.to_path_buf())
+        .unwrap()
 }
 
 #[test]
@@ -805,5 +815,61 @@ fn magics_are_hidden_from_python_but_kept() {
             "%matplotlib inline\n!pip install -q pandas\nx = 1".to_string()
         )
     );
+    h.assert_no_plugin_errors();
+}
+
+const NOISY_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "n", "metadata": {}, "outputs": [],
+   "source": ["noisy()"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// Terminal output as a terminal shows it: its colours (as the theme's), a progress bar redrawn
+/// with `\r` at its last state; long output cut at 40 lines until expanded.
+#[test]
+fn output_keeps_colours_progress_bars_settle_and_long_output_expands() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("noisy.ipynb");
+    fs::write(&nb_path, NOISY_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // tall enough for the cut output and its "more lines" note
+    let mut h = harness_sized(&project, &fake_nb, 60);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("failed twice"))
+        .unwrap();
+    let screen = h.screen_to_string();
+    assert!(
+        !screen.contains("[31m") && !screen.contains("50%"),
+        "{screen}"
+    );
+    assert!(screen.contains("   100%"), "{screen}");
+    assert!(screen.contains("… 12 more lines"), "{screen}");
+
+    // "failed" in the theme's error colour, "twice" in the output's own
+    let (x, y) = h.find_text_on_screen("failed twice").unwrap();
+    let error = h.editor().theme().diagnostic_error_fg;
+    assert_eq!(h.get_cell_style(x, y).unwrap().fg, Some(error));
+    assert_ne!(h.get_cell_style(x + 7, y).unwrap().fg, Some(error));
+
+    palette(&mut h, "Notebook: Expand Output");
+    h.wait_until(|h| !h.screen_to_string().contains("more lines"))
+        .unwrap();
     h.assert_no_plugin_errors();
 }

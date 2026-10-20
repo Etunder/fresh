@@ -246,6 +246,9 @@ fn build_virtual_view_line(
                     if o.underline {
                         s.underline = true;
                     }
+                    if let Some(fg) = &o.fg {
+                        s.fg = Some(fg.clone());
+                    }
                 }
                 Some(s)
             })

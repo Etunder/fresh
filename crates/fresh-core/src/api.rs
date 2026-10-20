@@ -1004,6 +1004,11 @@ pub struct VirtualLineTextOverlay {
     pub bold: bool,
     #[serde(default)]
     pub underline: bool,
+    /// Foreground for the range, over the line's own: `[r, g, b]` or a theme key (a notebook's
+    /// output keeps the colours its program printed in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fg: Option<TokenColor>,
 }
 
 impl OverlayColorSpec {

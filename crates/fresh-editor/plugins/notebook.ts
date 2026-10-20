@@ -51,7 +51,7 @@ const NS_MD = "notebook-md";
 
 type Cell = { id: string; kind: string; source: string };
 type Output = Record<string, unknown>;
-type Run = { count: number | null; outputs: Output[]; state: "idle" | "queued" | "busy" | "ok" | "error" };
+type Run = { count: number | null; outputs: Output[]; state: "idle" | "queued" | "busy" | "ok" | "error"; expanded?: boolean };
 
 type Notebook = {
   ipynb: string;
@@ -95,6 +95,65 @@ function bytes(s: string): number {
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+/** A colour or bold range of an output line (byte offsets in its text). */
+type Span8 = { start: number; end: number; fg?: string | [number, number, number]; bold?: boolean };
+
+/** The 16 ANSI colours as theme colours, so coloured output (tracebacks, logs, rich) follows it. */
+const ANSI_THEME = ["editor.line_number_fg", "diagnostic.error_fg", "syntax.string", "diagnostic.warning_fg",
+  "syntax.function", "syntax.keyword", "syntax.type", "editor.fg"];
+const XTERM6 = [0, 95, 135, 175, 215, 255];
+function xterm256(n: number): string | [number, number, number] {
+  if (n < 16) return ANSI_THEME[n % 8];
+  if (n < 232) {
+    const k = n - 16;
+    return [XTERM6[Math.floor(k / 36)], XTERM6[Math.floor(k / 6) % 6], XTERM6[k % 6]];
+  }
+  const g = 8 + 10 * (n - 232);
+  return [g, g, g];
+}
+
+/** One line of terminal output as plain text plus its colour ranges: SGR colours and bold kept,
+ *  other escapes dropped, and a line redrawn with `\r` (a progress bar) as its last state. */
+export function ansiLine(raw: string): { text: string; spans: Span8[] } {
+  const parts = raw.split("\r");
+  let line = parts[parts.length - 1];
+  for (let k = parts.length - 1; k >= 0 && stripAnsi(line) === ""; k--) line = parts[k];
+  let text = "";
+  const spans: Span8[] = [];
+  let fg: Span8["fg"];
+  let bold = false;
+  let open = 0;
+  const close = () => {
+    const end = bytes(text);
+    if (end > open && (fg !== undefined || bold)) spans.push({ start: open, end, fg, bold: bold || undefined });
+    open = end;
+  };
+  const re = /\x1b\[([0-9;?]*)([ -/]*[@-~])/g;
+  let last = 0;
+  for (let m = re.exec(line); m; m = re.exec(line)) {
+    text += line.slice(last, m.index);
+    last = re.lastIndex;
+    if (m[2] !== "m") continue;
+    close();
+    const codes = m[1] === "" ? [0] : m[1].split(";").map((c) => Number(c) || 0);
+    for (let i = 0; i < codes.length; i++) {
+      const c = codes[i];
+      if (c === 0) { fg = undefined; bold = false; }
+      else if (c === 1) bold = true;
+      else if (c === 22) bold = false;
+      else if (c === 39) fg = undefined;
+      else if (c >= 30 && c <= 37) fg = ANSI_THEME[c - 30];
+      else if (c >= 90 && c <= 97) fg = ANSI_THEME[c - 90];
+      else if (c === 38 && codes[i + 1] === 5) { fg = xterm256(codes[i + 2] ?? 7); i += 2; }
+      else if (c === 38 && codes[i + 1] === 2) { fg = [codes[i + 2] ?? 0, codes[i + 3] ?? 0, codes[i + 4] ?? 0]; i += 4; }
+      else if (c === 48 && (codes[i + 1] === 5 || codes[i + 1] === 2)) i += codes[i + 1] === 5 ? 2 : 4;
+    }
+  }
+  text += line.slice(last);
+  close();
+  return { text, spans };
 }
 
 function newId(): string {
@@ -772,7 +831,7 @@ function dropStaleImages(): void {
 // ── drawing ──────────────────────────────────────────────────────────
 
 /** A line drawn under a cell: text in a theme colour, or one row of an image. */
-type OutLine = { text: string; fg: string | [number, number, number]; clip?: boolean };
+type OutLine = { text: string; fg: string | [number, number, number]; clip?: boolean; spans?: Span8[] };
 
 /** The cells of an HTML table's rows (`<th>`/`<td>`, tags inside stripped, entities decoded, a
  *  `colspan` as that many cells) and the text after the table (pandas' "5 rows × 3 columns"); null
@@ -830,8 +889,11 @@ function tableLines(t: { rows: { cells: string[]; head: boolean }[]; note: strin
 /** An output's lines: its text in the colour it draws in, or the rows of its image. */
 function outputLines(o: Output): OutLine[] {
   const join = (v: unknown) => (Array.isArray(v) ? v.join("") : String(v ?? ""));
-  const lines = (s: string, fg: string) =>
-    stripAnsi(s).replace(/\n$/, "").split("\n").map((text) => ({ text, fg }));
+  const lines = (s: string, fg: string): OutLine[] =>
+    s.replace(/\n$/, "").split("\n").map((raw) => {
+      const { text, spans } = ansiLine(raw);
+      return { text, fg, spans };
+    });
   switch (o.output_type) {
     case "stream":
       return lines(join(o.text), o.name === "stderr" ? "diagnostic.warning_fg" : "editor.fg");
@@ -1030,20 +1092,24 @@ async function decorate(nb: Notebook): Promise<void> {
       }
     }
     if (!r || s.cell.kind !== "code") return;
-    // long text output is cut; image rows are never (half a plot helps nobody)
+    // long text output is cut (unless expanded); image rows are never (half a plot helps nobody)
     let shown = 0;
     let more = 0;
     const out: OutLine[] = r.outputs.flatMap(outputLines).filter((l) => {
-      if (Array.isArray(l.fg)) return true;
-      if (shown < MAX_OUTPUT_LINES) return ++shown > 0;
+      if (Array.isArray(l.fg) && !l.spans) return true;
+      if (r.expanded || shown < MAX_OUTPUT_LINES) return ++shown > 0;
       more++;
       return false;
     });
-    if (more) out.push({ text: `… ${more} more lines`, fg: "editor.line_number_fg" });
+    if (more) out.push({ text: `… ${more} more lines (Notebook: Expand Output)`, fg: "editor.line_number_fg" });
     if (!out.length) return;
     out.forEach((l, j) =>
       // three columns in, level with the cell's code (its two-column margin plus the inlay space)
-      editor.addVirtualLine(buf, textStart(s.lastLine), "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined, clip: l.clip },
+      editor.addVirtualLine(buf, textStart(s.lastLine), "   " + l.text, {
+        fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined, clip: l.clip,
+        // the indent shifts the ranges by its three bytes
+        textOverlays: l.spans?.length ? l.spans.map((sp) => ({ ...sp, start: sp.start + 3, end: sp.end + 3 })) : undefined,
+      },
         false, NS_OUT, j + 1));
   });
   dropStaleImages();
@@ -1435,6 +1501,16 @@ async function clearOutputs(all: boolean): Promise<void> {
 registerHandler("notebook_clear_output", () => clearOutputs(false));
 registerHandler("notebook_clear_all", () => clearOutputs(true));
 
+registerHandler("notebook_expand_output", async () => {
+  const nb = active();
+  if (!nb) return;
+  const { spans, i } = await cellsAtCursor(nb);
+  const r = spans[i] && nb.runs.get(spans[i].cell.id);
+  if (!r) return;
+  r.expanded = !r.expanded;
+  await decorate(nb);
+});
+
 registerHandler("notebook_run_above", async () => {
   const nb = active();
   if (!nb) return;
@@ -1468,6 +1544,7 @@ for (const [name, what, handler] of [
   ["Change Cell to Code", "This cell becomes a code cell", "notebook_to_code"],
   ["Clear Cell Output", "Remove this cell's outputs and run count", "notebook_clear_output"],
   ["Clear All Outputs", "Remove every cell's outputs and run counts", "notebook_clear_all"],
+  ["Expand Output", "Show all of this cell's output, or cut it at 40 lines again", "notebook_expand_output"],
   ["Run Cells Above", "Run every code cell before this one", "notebook_run_above"],
   ["Run Cell and Below", "Run this cell and every one after it", "notebook_run_below"],
   ["Restart and Run All", "A fresh kernel, then every code cell from the top", "notebook_restart_run_all"],
