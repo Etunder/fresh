@@ -10,8 +10,13 @@ in WezTerm on Windows, so the fork:
   of them can be changed back in settings: `"theme"`, `"editor.show_menu_bar"`,
   `"editor.chrome_style": "fresh"` (Fresh's own tab bar and layout), `"editor.status_bar"`. The test
   suite builds on `Config::default()`, which stays upstream's;
-- **will open Jupyter notebooks natively**, with kitty images, using the `nb` kernel library from
-  herdr-wr (plan: `herdr-wr/docs/notebook-plan.md`);
+- **opens Jupyter notebooks**: a `.ipynb` opens as its cells in the percent format (`# %%` lines,
+  drawn as quiet rules with the run count), with the editor's Python editing and language server.
+  Shift+Enter (or Alt+Enter) runs a cell, Ctrl+Enter runs it and stays; outputs show under the
+  cell; saving writes the notebook. The kernel is herdr-wr's `nb serve` (setting
+  `plugins.notebook.nbCommand`, default `nb` on PATH), which picks the repo's venv like `wr` does
+  (`plugins/notebook.ts`; plan: `herdr-wr/docs/notebook-plan.md`). Images show as a placeholder
+  for now; kitty images are next;
 - **drops what herdr already does**: no Orchestrator (workspaces, agent sessions, the dock);
   herdr manages the panes and the agents;
 - **never updates itself from upstream**: self-update is not built in and the update check is

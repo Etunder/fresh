@@ -51,6 +51,7 @@
     "markdown_source.ts",
     "markdown_toc.ts",
     "merge_conflict.ts",
+    "notebook.ts",
     "path_complete.ts",
     "pkg.ts",
     "rust-lsp.ts",
