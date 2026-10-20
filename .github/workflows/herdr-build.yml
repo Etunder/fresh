@@ -1,14 +1,16 @@
 name: herdr build
 
 # The fork's deliverable: a fresh.exe for the wr/herdr team environment (Windows, no admin), built
-# on every push to master and on pull requests, attached to a GitHub release for `v*` tags.
+# on every push and pull request. Pushes to master and to the herdr branch publish it as the
+# release v<herdr-version>-herdr (created, or its files replaced), so "latest" is always the
+# current build; a pushed `v*` tag publishes its own release.
 
 permissions:
   contents: read
 
 on:
   push:
-    branches: [master]
+    branches: [master, claude/herdr-fork]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -43,18 +45,36 @@ jobs:
 
   release:
     name: release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push'
     needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: fresh-windows-x64
+          path: dist
       - name: Checksum
+        working-directory: dist
         run: sha256sum fresh.exe > fresh.exe.sha256
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" fresh.exe fresh.exe.sha256 --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes "herdr fork build"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$(tr -d '[:space:]' < herdr-version)-herdr"
+          fi
+          notes="herdr edition of Fresh, built from ${GITHUB_SHA::7}. Install: put fresh.exe in bin\\ next to wr's install.ps1, or anywhere on PATH."
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/fresh.exe dist/fresh.exe.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/fresh.exe dist/fresh.exe.sha256 --target "$GITHUB_SHA" \
+              --title "$tag" --notes "$notes" --latest --repo "$GITHUB_REPOSITORY"
+          fi
