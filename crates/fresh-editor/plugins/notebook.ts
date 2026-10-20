@@ -273,7 +273,17 @@ function workingCopyPath(ipynb: string): string {
   const key = ipynb.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(-60);
   const dir = editor.pathJoin(editor.getDataDir(), "notebooks", key);
   editor.createDir(dir);
+  // which notebook this is, for a working copy the editor restores on its own (below)
+  editor.writeFile(editor.pathJoin(dir, "notebook.txt"), ipynb);
   return editor.pathJoin(dir, editor.pathBasename(ipynb) + ".py");
+}
+
+/** The notebook a working copy belongs to, if `path` is one (from the note beside it). */
+function notebookOfCopy(path: string): string | null {
+  const root = editor.pathJoin(editor.getDataDir(), "notebooks");
+  if (!path.startsWith(root) || !path.endsWith(".py")) return null;
+  const note = editor.readFile(editor.pathJoin(editor.pathDirname(path), "notebook.txt"));
+  return note ? note.trim() : null;
 }
 
 registerHandler("notebook_on_stdout", (e: { process_id: number; data: string }) => {
@@ -1012,24 +1022,53 @@ function showCopy(nb: Notebook, jsonBuffer: number): void {
   editor.openFile(nb.copy);
 }
 
+/** The working copy is open in `buffer`: set it up as the notebook's view. */
+function copyOpened(nb: Notebook, buffer: number): void {
+  nb.bufferId = buffer;
+  editor.setLineNumbersDefault(buffer, false);
+  // the kernel's completions, asked at once after a `.`
+  editor.registerCompletionSource(buffer, ".");
+  showKernel(nb);
+  if (nb.jsonBuffer !== null) editor.closeBuffer(nb.jsonBuffer, true);
+  nb.jsonBuffer = null;
+  followMode();
+}
+
 registerHandler("notebook_after_open", async (e: { path: string; buffer_id: number }) => {
   const copyOf = byCopy.get(e.path);
   if (copyOf) {
-    copyOf.bufferId = e.buffer_id;
-    editor.setLineNumbersDefault(e.buffer_id, false);
-    // the kernel's completions, asked at once after a `.`
-    editor.registerCompletionSource(e.buffer_id, ".");
-    showKernel(copyOf);
-    if (copyOf.jsonBuffer !== null) editor.closeBuffer(copyOf.jsonBuffer, true);
-    copyOf.jsonBuffer = null;
-    followMode();
+    copyOpened(copyOf, e.buffer_id);
     await decorate(copyOf);
+    return;
+  }
+  // a working copy the editor brought back by itself (its session, or crash recovery with the
+  // unsaved edits): attach it to its notebook as it is, and start the notebook's nb
+  const restoredOf = notebookOfCopy(e.path);
+  if (restoredOf) {
+    const nb = byIpynb.get(restoredOf) ?? start(restoredOf);
+    byIpynb.set(restoredOf, nb);
+    byCopy.set(e.path, nb);
+    nb.copy = e.path;
+    const opened = await ask(nb, "open");
+    if (opened.ok) {
+      for (const [id, r] of Object.entries(opened.runs as Record<string, { execution_count: number | null; outputs: Output[] }>)) {
+        if (!nb.runs.has(id)) nb.runs.set(id, { count: r.execution_count, outputs: r.outputs, state: "idle" });
+      }
+    }
+    copyOpened(nb, e.buffer_id);
+    await decorate(nb);
     return;
   }
   if (!e.path.toLowerCase().endsWith(".ipynb")) return;
   const known = byIpynb.get(e.path);
   if (known) {
-    showCopy(known, e.buffer_id);
+    // its working copy is open already (restored with it): show that, drop the JSON view
+    if (known.bufferId !== null) {
+      editor.openFile(known.copy);
+      editor.closeBuffer(e.buffer_id, true);
+    } else {
+      showCopy(known, e.buffer_id);
+    }
     return;
   }
   editor.setStatus(`notebook: opening ${editor.pathBasename(e.path)}…`);
@@ -1167,7 +1206,9 @@ registerHandler("notebook_complete", async (e: { buffer_id: number; request_id: 
       const label = m.text.slice(lead.length);
       if (!label || seen.has(label)) continue;
       seen.add(label);
-      items.push({ label, kind: m.type ? KINDS[m.type] : undefined, detail: m.signature || m.type || undefined });
+      // IPython says "<unknown>" for what it didn't evaluate: no detail then
+      const type = m.type && m.type !== "<unknown>" ? m.type : undefined;
+      items.push({ label, kind: type ? KINDS[type] : undefined, detail: m.signature || type });
     }
   }
   editor.supplyCompletions(e.request_id, items);

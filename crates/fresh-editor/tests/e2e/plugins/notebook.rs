@@ -527,3 +527,64 @@ fn an_html_table_is_drawn_as_a_text_table() {
     );
     h.assert_no_plugin_errors();
 }
+
+/// A working copy the editor brings back by itself (session restore, crash recovery with unsaved
+/// edits) is attached to its notebook as it is: the edits kept, the notebook view on, and the
+/// notebook's own JSON tab, if it comes back too, folded into it.
+#[test]
+fn a_restored_working_copy_is_attached_to_its_notebook() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    fs::write(&nb_path, NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    // what a previous session left: the working copy with an edit never saved to the notebook
+    let dir = h
+        .editor()
+        .dir_context()
+        .data_dir
+        .join("notebooks")
+        .join("report");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("notebook.txt"), nb_path.to_str().unwrap()).unwrap();
+    let copy = dir.join("report.ipynb.py");
+    fs::write(
+        &copy,
+        "# %% [markdown] id=intro\n# # Report\n\n# %% id=hello\nprint('edited, unsaved')\n",
+    )
+    .unwrap();
+    h.open_file(&copy).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("── 2 [ ]"))
+        .unwrap();
+    assert!(h.screen_to_string().contains("print('edited, unsaved')"));
+    assert!(!h.editor().active_window().is_editing_disabled());
+
+    // the notebook itself opening again shows the same view, no JSON tab
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        !s.contains("nbformat") && s.contains("print('edited, unsaved')")
+    })
+    .unwrap();
+
+    // and saving writes the kept edit into the notebook
+    h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
+        .unwrap();
+    let saved = project.join("saved.json");
+    h.wait_until(|_| saved.exists()).unwrap();
+    let cells: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&saved).unwrap()).unwrap();
+    assert_eq!(cells[1]["source"], "print('edited, unsaved')");
+    h.assert_no_plugin_errors();
+}
