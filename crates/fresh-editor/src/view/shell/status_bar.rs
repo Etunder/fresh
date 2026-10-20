@@ -212,7 +212,10 @@ pub fn status_bar(bar: &StatusBar) -> Node<UiMsg> {
 fn build(bar: &StatusBar) -> Node<UiMsg> {
     let mut kids: Vec<Node<UiMsg>> = Vec::new();
     for (i, it) in bar.left.iter().enumerate() {
-        if i > 0 {
+        if i > 0 && bar.left[i - 1].name == "mode" {
+            // herdr's mode badge stands apart by a space, not a separator.
+            kids.push(text_runs([Run::themed(" ", bar.base_theme.clone())]));
+        } else if i > 0 {
             kids.push(separator(bar, Side::Left));
         }
         kids.push(element(it, key_of(Side::Left, i, it), Side::Left));

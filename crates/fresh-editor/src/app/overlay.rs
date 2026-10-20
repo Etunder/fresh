@@ -198,6 +198,12 @@ impl Editor {
     /// same key — a dismissal, a focus move — is what the answer reflects.
     pub fn get_key_context(&mut self) -> crate::input::keybindings::KeyContext {
         self.lay_out_shell_if_stale();
+        self.key_context_as_laid_out()
+    }
+
+    /// `get_key_context` as of the last layout, for the frame being drawn
+    /// (the status bar's `{mode}` badge), which must not lay the shell out again.
+    pub(crate) fn key_context_as_laid_out(&self) -> crate::input::keybindings::KeyContext {
         if let Some(ui) = self.shell_ui.as_ref() {
             if let Some(f) = ui.focused() {
                 for e in ui.path_to(f).into_iter().rev() {

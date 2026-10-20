@@ -62,8 +62,9 @@ Paths in brackets are herdr's.
 The colours are the built-in `herdr` theme (`crates/fresh-editor-core/themes/herdr.json`), the
 default. Layout changes are behind `editor.chrome_style: "herdr"` (default `"fresh"` upstream, set by
 `herdr-defaults.json`), so Fresh's own layout and tests stay intact. Done so far: tab chips with the
-close mark on hover, the status bar's ` · ` separators and accent key hint, the hidden menu bar,
-quiet scrollbars.
+close mark on hover, the status bar's ` · ` separators and accent key hint, the `{mode}` badge
+(`EDIT`, `TERMINAL`, `EXPLORER`, `PROMPT`, `NOTEBOOK`, …) at the left of the status bar, the hidden
+menu bar, quiet scrollbars.
 
 ## Feel (decided with the team)
 

@@ -1190,6 +1190,10 @@
         {
           "value": "{trust}",
           "name": "Workspace Trust"
+        },
+        {
+          "value": "{mode}",
+          "name": "Mode"
         }
       ]
     },

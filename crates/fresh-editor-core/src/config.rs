@@ -876,6 +876,7 @@ impl WhitespaceVisibility {
 /// - `"{palette}"` — command palette shortcut hint
 /// - `"{clock}"` — current time (HH:MM)
 /// - `"{remote}"` — remote authority indicator (Local / SSH / Container / Disconnected)
+/// - `"{mode}"` — what has the keyboard, as a badge (`EDIT`, `TERMINAL`, `EXPLORER`, a plugin mode)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum StatusBarElement {
@@ -928,6 +929,9 @@ pub enum StatusBarElement {
     /// workspace-trust prompt. A persistent, core counterpart to the env-manager
     /// plugin's per-buffer trust chip.
     WorkspaceTrust,
+    /// What has the keyboard, as herdr's mode badge: `EDIT`, `TERMINAL`,
+    /// `EXPLORER`, `PROMPT`, or the active plugin mode (`NOTEBOOK`, vi's).
+    Mode,
     /// Custom token registered by a plugin (format: "plugin_name:token_name")
     CustomToken(String),
 }
@@ -960,6 +964,7 @@ impl TryFrom<String> for StatusBarElement {
             "clock" => Ok(Self::Clock),
             "remote" => Ok(Self::RemoteIndicator),
             "trust" => Ok(Self::WorkspaceTrust),
+            "mode" => Ok(Self::Mode),
             _ => {
                 // Check if it's a custom token (contains ':')
                 if inner.contains(':') {
@@ -994,6 +999,7 @@ impl From<StatusBarElement> for String {
             StatusBarElement::Clock => "{clock}".to_string(),
             StatusBarElement::RemoteIndicator => "{remote}".to_string(),
             StatusBarElement::WorkspaceTrust => "{trust}".to_string(),
+            StatusBarElement::Mode => "{mode}".to_string(),
             StatusBarElement::CustomToken(name) => format!("{{{}}}", name),
         }
     }
@@ -1025,7 +1031,8 @@ impl schemars::JsonSchema for StatusBarElement {
                 {"value": "{palette}", "name": "Palette"},
                 {"value": "{clock}", "name": "Clock"},
                 {"value": "{remote}", "name": "Remote Indicator"},
-                {"value": "{trust}", "name": "Workspace Trust"}
+                {"value": "{trust}", "name": "Workspace Trust"},
+                {"value": "{mode}", "name": "Mode"}
             ]
         })
     }

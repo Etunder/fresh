@@ -5,6 +5,7 @@
     "chrome_style": "herdr",
     "status_bar": {
       "left": [
+        "{mode}",
         "{trust}",
         "{terminal_restart}",
         "{cursor}",
