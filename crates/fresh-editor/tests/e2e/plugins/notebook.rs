@@ -111,6 +111,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     json.dump(req, f)
                 emit({"event": "kernel", "state": "selected", "name": "Other Kernel"})
                 body["name"] = "Other Kernel"
+            elif url.path == "/clear":
+                with open(os.path.join(os.path.dirname(notebook), "cleared.json"), "w") as f:
+                    json.dump(req, f)
             elif url.path == "/interrupt":
                 open(os.path.join(os.path.dirname(notebook), "interrupted"), "w").close()
             elif url.path == "/save":
@@ -620,5 +623,126 @@ fn a_previewed_notebook_shows_as_cells() {
     h.wait_until(shows_cells).unwrap();
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+fn palette(h: &mut EditorTestHarness, command: &str) {
+    h.send_key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_for_prompt().unwrap();
+    h.type_text(command).unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+}
+
+/// Saves and returns the cells nb was sent, as (kind, source) pairs.
+fn saved_cells(h: &mut EditorTestHarness, project: &Path) -> Vec<(String, String)> {
+    let saved = project.join("saved.json");
+    let _ = fs::remove_file(&saved);
+    h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_until(|_| saved.exists()).unwrap();
+    let cells: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&saved).unwrap()).unwrap();
+    cells
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().unwrap().to_string(),
+                c["source"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Cells are added, moved, split, merged, converted and deleted with commands; the saved
+/// notebook follows.
+#[test]
+fn cells_are_edited_with_commands() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    fs::write(&nb_path, NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    let pair = |k: &str, s: &str| (k.to_string(), s.to_string());
+
+    // a new cell under the markdown one, typed into, then moved to the top
+    palette(&mut h, "Notebook: Insert Cell Below");
+    h.wait_until(|h| h.screen_to_string().contains("── 3 [ ]"))
+        .unwrap();
+    h.type_text("x = 1").unwrap();
+    h.send_key(KeyCode::Up, KeyModifiers::ALT | KeyModifiers::SHIFT)
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [
+            pair("code", "x = 1"),
+            pair("markdown", "# Report"),
+            pair("code", "print('hello')")
+        ]
+    );
+
+    // to markdown and back, a split, a merge
+    palette(&mut h, "Notebook: Change Cell to Markdown");
+    h.wait_until(|h| h.screen_to_string().contains("── 1 markdown"))
+        .unwrap();
+    palette(&mut h, "Notebook: Change Cell to Code");
+    h.wait_until(|h| h.screen_to_string().contains("── 1 [ ]"))
+        .unwrap();
+    h.send_key(KeyCode::End, KeyModifiers::NONE).unwrap();
+    h.type_text("\ny = 2").unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::NONE).unwrap();
+    palette(&mut h, "Notebook: Split Cell");
+    h.wait_until(|h| h.screen_to_string().contains("── 4 [ ]"))
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [
+            pair("code", "x = 1"),
+            pair("code", "y = 2"),
+            pair("markdown", "# Report"),
+            pair("code", "print('hello')")
+        ]
+    );
+    palette(&mut h, "Notebook: Move Cell Up");
+    palette(&mut h, "Notebook: Merge Cell Below");
+    h.wait_until(|h| !h.screen_to_string().contains("── 4"))
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [
+            pair("code", "y = 2\nx = 1"),
+            pair("markdown", "# Report"),
+            pair("code", "print('hello')")
+        ]
+    );
+
+    // delete it; clear every output (nb is told, so a save writes them empty)
+    palette(&mut h, "Notebook: Delete Cell");
+    h.wait_until(|h| !h.screen_to_string().contains("y = 2"))
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [pair("markdown", "# Report"), pair("code", "print('hello')")]
+    );
+    palette(&mut h, "Notebook: Clear All Outputs");
+    let cleared = project.join("cleared.json");
+    h.wait_until(|_| cleared.exists()).unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&cleared).unwrap()).unwrap();
+    assert_eq!(req, serde_json::json!({"cells": ["intro", "hello"]}));
     h.assert_no_plugin_errors();
 }

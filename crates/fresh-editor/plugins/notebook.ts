@@ -1295,6 +1295,147 @@ registerHandler("notebook_kernel_chosen", async (e: { prompt_type: string; input
 editor.on("prompt_confirmed", "notebook_kernel_chosen");
 editor.registerCommand("Notebook: Select Kernel", "Choose the venv or Jupyter kernel this notebook runs on (remembered)", "notebook_select_kernel", "notebook");
 
+// ── cell commands ────────────────────────────────────────────────────
+
+/** Replaces the buffer's text with `next`, as one edit of the part that differs (so the cursor,
+ *  undo and the decorations elsewhere stay as they were). */
+function replaceText(buf: number, prev: string, next: string): void {
+  let a = 0;
+  while (a < prev.length && a < next.length && prev[a] === next[a]) a++;
+  let b = 0;
+  while (b < prev.length - a && b < next.length - a && prev[prev.length - 1 - b] === next[next.length - 1 - b]) b++;
+  const from = bytes(prev.slice(0, a));
+  const to = from + bytes(prev.slice(a, prev.length - b));
+  if (to > from) editor.deleteRange(buf, from, to);
+  const insert = next.slice(a, next.length - b);
+  if (insert) editor.insertText(buf, from, insert);
+}
+
+/** The cells, the index of the one under the cursor, and how far into its source the cursor is
+ *  (characters of the source as written in the working copy). */
+async function cellsAtCursor(nb: Notebook): Promise<{ text: string; spans: Span[]; i: number; offset: number }> {
+  const spans = await cellsWithIds(nb);
+  const text = await editor.getBufferText(nb.bufferId!);
+  const cursor = editor.getCursorPosition();
+  const i = Math.max(0, spans.findIndex((s, k) => cursor >= s.start && (k === spans.length - 1 || cursor < spans[k + 1].start)));
+  const s = spans[i];
+  const bodyStart = s ? (s.markerEnd > s.start ? s.markerEnd + 1 : s.start) : 0;
+  const offset = s && cursor > bodyStart ? (await editor.getBufferText(nb.bufferId!, bodyStart, cursor)).length : 0;
+  return { text, spans, i, offset };
+}
+
+/** Rewrites the cells (`edit` changes the list and says which cell the cursor goes to), puts the
+ *  cursor at the start of that cell's source, and redraws. */
+async function editCells(edit: (cells: Cell[], i: number, offset: number) => number | null): Promise<void> {
+  const nb = active();
+  if (!nb) return;
+  const { text, spans, i, offset } = await cellsAtCursor(nb);
+  const cells = spans.map((s) => ({ ...s.cell }));
+  const target = edit(cells, i, offset);
+  if (target === null) return;
+  if (cells.length === 0) cells.push({ id: newId(), kind: "code", source: "" });
+  const next = cellsToText(cells);
+  replaceText(nb.bufferId!, text, next);
+  const at = textToCells(next)[Math.max(0, Math.min(target, cells.length - 1))];
+  if (at) editor.setBufferCursor(nb.bufferId!, at.markerEnd > at.start ? Math.min(at.markerEnd + 1, at.end) : at.start);
+  await decorate(nb);
+}
+
+const blank = (kind = "code"): Cell => ({ id: newId(), kind, source: "" });
+
+registerHandler("notebook_insert_below", () => editCells((cells, i) => (cells.splice(i + 1, 0, blank()), i + 1)));
+registerHandler("notebook_insert_above", () => editCells((cells, i) => (cells.splice(i, 0, blank()), i)));
+registerHandler("notebook_insert_markdown_below", () =>
+  editCells((cells, i) => (cells.splice(i + 1, 0, blank("markdown")), i + 1)));
+registerHandler("notebook_delete_cell", () => editCells((cells, i) => (cells.splice(i, 1), Math.min(i, cells.length - 1))));
+registerHandler("notebook_move_up", () =>
+  editCells((cells, i) => (i === 0 ? null : (([cells[i - 1], cells[i]] = [cells[i], cells[i - 1]]), i - 1))));
+registerHandler("notebook_move_down", () =>
+  editCells((cells, i) => (i >= cells.length - 1 ? null : (([cells[i], cells[i + 1]] = [cells[i + 1], cells[i]]), i + 1))));
+registerHandler("notebook_split", () =>
+  editCells((cells, i, offset) => {
+    const c = cells[i];
+    // a markdown cell's source is shown with `# ` before each line: split it at the cursor's line
+    let at = offset;
+    if (c.kind !== "code") {
+      const shown = c.source.split("\n").map((l) => (l.length ? "# " + l : "#"));
+      let line = 0, n = 0;
+      while (line < shown.length && n + shown[line].length < offset) n += shown[line++].length + 1;
+      at = c.source.split("\n").slice(0, line).reduce((k, l) => k + l.length + 1, 0);
+    }
+    const before = c.source.slice(0, at).replace(/\n$/, "");
+    const after = c.source.slice(at).replace(/^\n/, "");
+    if (!before.trim() || !after.trim()) return null;
+    cells.splice(i, 1, { ...c, source: before }, { id: newId(), kind: c.kind, source: after });
+    return i + 1;
+  }));
+registerHandler("notebook_merge_below", () =>
+  editCells((cells, i) => {
+    if (i >= cells.length - 1) return null;
+    const [a, b] = [cells[i], cells[i + 1]];
+    cells.splice(i, 2, { ...a, source: [a.source, b.source].filter((s) => s !== "").join("\n") });
+    return i;
+  }));
+registerHandler("notebook_to_markdown", () =>
+  editCells((cells, i) => (cells[i].kind === "markdown" ? null : ((cells[i] = { ...cells[i], kind: "markdown" }), i))));
+registerHandler("notebook_to_code", () =>
+  editCells((cells, i) => (cells[i].kind === "code" ? null : ((cells[i] = { ...cells[i], kind: "code" }), i))));
+
+/** Clears outputs and run counts (in nb too, so saving writes them empty). */
+async function clearOutputs(all: boolean): Promise<void> {
+  const nb = active();
+  if (!nb) return;
+  const { spans, i } = await cellsAtCursor(nb);
+  const ids = (all ? spans : spans.slice(i, i + 1)).map((s) => s.cell.id);
+  const r = await ask(nb, "clear", { cells: ids });
+  if (!r.ok) {
+    editor.setStatus(`notebook: ${r.message}`);
+    return;
+  }
+  for (const id of ids) nb.runs.delete(id);
+  await decorate(nb);
+}
+registerHandler("notebook_clear_output", () => clearOutputs(false));
+registerHandler("notebook_clear_all", () => clearOutputs(true));
+
+registerHandler("notebook_run_above", async () => {
+  const nb = active();
+  if (!nb) return;
+  const { spans, i } = await cellsAtCursor(nb);
+  await runCells(nb, spans.slice(0, i));
+});
+registerHandler("notebook_run_below", async () => {
+  const nb = active();
+  if (!nb) return;
+  const { spans, i } = await cellsAtCursor(nb);
+  await runCells(nb, spans.slice(i));
+});
+registerHandler("notebook_restart_run_all", async () => {
+  const nb = active();
+  if (!nb) return;
+  await ask(nb, "restart");
+  for (const r of nb.runs.values()) if (r.state === "busy" || r.state === "queued") r.state = "error";
+  await runCells(nb, await cellsWithIds(nb));
+});
+
+for (const [name, what, handler] of [
+  ["Insert Cell Below", "A new code cell after this one", "notebook_insert_below"],
+  ["Insert Cell Above", "A new code cell before this one", "notebook_insert_above"],
+  ["Insert Markdown Cell Below", "A new markdown cell after this one", "notebook_insert_markdown_below"],
+  ["Delete Cell", "Remove the cell under the cursor (Ctrl+Z brings it back)", "notebook_delete_cell"],
+  ["Move Cell Up", "Swap this cell with the one above (Alt+Shift+Up)", "notebook_move_up"],
+  ["Move Cell Down", "Swap this cell with the one below (Alt+Shift+Down)", "notebook_move_down"],
+  ["Split Cell", "Split this cell in two at the cursor", "notebook_split"],
+  ["Merge Cell Below", "Join the next cell onto this one", "notebook_merge_below"],
+  ["Change Cell to Markdown", "This cell becomes a markdown cell", "notebook_to_markdown"],
+  ["Change Cell to Code", "This cell becomes a code cell", "notebook_to_code"],
+  ["Clear Cell Output", "Remove this cell's outputs and run count", "notebook_clear_output"],
+  ["Clear All Outputs", "Remove every cell's outputs and run counts", "notebook_clear_all"],
+  ["Run Cells Above", "Run every code cell before this one", "notebook_run_above"],
+  ["Run Cell and Below", "Run this cell and every one after it", "notebook_run_below"],
+  ["Restart and Run All", "A fresh kernel, then every code cell from the top", "notebook_restart_run_all"],
+]) editor.registerCommand(`Notebook: ${name}`, what, handler, "notebook");
+
 editor.registerCommand("Notebook: Run Cell", "Run the cell under the cursor and move to the next", "notebook_run_advance", "notebook");
 editor.registerCommand("Notebook: Run Cell and Stay", "Run the cell under the cursor", "notebook_run_stay", "notebook");
 editor.registerCommand("Notebook: Run All", "Run every code cell, top to bottom", "notebook_run_all", "notebook");
@@ -1315,6 +1456,8 @@ editor.defineMode("notebook", [
   ["M-Enter", "notebook_run_advance"],
   ["C-Enter", "notebook_run_stay"],
   ["M-k", "notebook_docs"],
+  ["M-S-Up", "notebook_move_up"],
+  ["M-S-Down", "notebook_move_down"],
 ], false);
 
 function followMode(): void {
