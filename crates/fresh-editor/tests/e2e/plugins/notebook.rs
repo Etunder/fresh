@@ -75,6 +75,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "stream", "name": "stdout", "text": "ran: " + req["code"] + "\n"}})
                 emit({"event": "done", "cell": req["cell"], "status": "ok", "execution_count": count[0]})
+            elif url.path == "/math":
+                with open(os.path.join(os.path.dirname(notebook), "math.json"), "w") as f:
+                    json.dump(req, f)
+                body.update({"png": PNG, "width": 80, "height": 48})
             elif url.path == "/interrupt":
                 open(os.path.join(os.path.dirname(notebook), "interrupted"), "w").close()
             elif url.path == "/save":
@@ -278,5 +282,62 @@ fn an_image_output_is_drawn_with_kitty_placeholders() {
         sent.ends_with("\x1b_Ga=p,U=1,i=5128704,c=10,r=3,q=2\x1b\\"),
         "{sent:?}"
     );
+    h.assert_no_plugin_errors();
+}
+
+const MATH_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "markdown", "id": "maths", "metadata": {}, "source": ["Euler:\n", "$$e^{i\\pi} + 1 = 0$$"]},
+  {"cell_type": "code", "execution_count": null, "id": "after", "metadata": {}, "outputs": [],
+   "source": ["x = 1"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// Display math goes to nb to be typeset and comes back as an image under the block (drawn at
+/// twice the cell size, so the 80x48 PNG covers 5x2 cells); the source hides once the cursor
+/// leaves the cell.
+#[test]
+fn display_math_is_typeset_as_an_image() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("maths.ipynb");
+    fs::write(&nb_path, MATH_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    let placeholder = '\u{10EEEE}';
+    let rows = |h: &EditorTestHarness| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+    };
+    h.wait_until(|h| rows(h) == 2).unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("math.json")).unwrap()).unwrap();
+    assert_eq!(req["latex"], "e^{i\\pi} + 1 = 0");
+    // while the cursor is in the cell, the source shows above the image
+    assert!(h.screen_to_string().contains("$$e^{i\\pi} + 1 = 0$$"));
+
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| !h.screen_to_string().contains("$$")).unwrap();
+    let screen = h.screen_to_string();
+    assert!(screen.contains("   Euler:"), "{screen}");
+    assert_eq!(rows(&h), 2, "{screen}");
+    assert!(!screen.contains("e^{"), "no Unicode fallback once typeset:\n{screen}");
     h.assert_no_plugin_errors();
 }

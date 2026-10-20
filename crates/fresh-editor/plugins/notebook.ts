@@ -613,9 +613,17 @@ function uploadImage(o: Output, b64: string): Image | null {
   if (known) return known;
   const size = pngSize(b64);
   if (!size) return null;
+  const img = sendImage(b64, size[0], size[1]);
+  if (img) images.set(o, img);
+  return img;
+}
+
+/** Uploads a PNG of `w`×`h` pixels (at `density` pixels per terminal pixel) and places it
+ *  virtually over as many cells as it covers, no wider than the setting nor the pane. */
+function sendImage(b64: string, w: number, h: number, density = 1): Image | null {
   const [cw, ch] = cellPixels();
-  let cols = Math.max(1, Math.ceil(size[0] / cw));
-  let rows = Math.max(1, Math.ceil(size[1] / ch));
+  let cols = Math.max(1, Math.ceil(w / density / cw));
+  let rows = Math.max(1, Math.ceil(h / density / ch));
   // no wider than the setting, nor than the pane (a soft-wrapped row would break the image)
   const pane = editor.getViewport()?.width ?? 0;
   const widest = pane > 20 ? Math.min(IMAGE_MAX_COLUMNS, pane - 4) : IMAGE_MAX_COLUMNS;
@@ -636,9 +644,48 @@ function uploadImage(o: Output, b64: string): Image | null {
     .join("");
   seq += esc(`a=p,U=1,i=${id},c=${cols},r=${rows},q=2`);
   if (!editor.writeTerminalGraphics(seq)) return null;
-  const img = { id, cols, rows };
-  images.set(o, img);
-  return img;
+  return { id, cols, rows };
+}
+
+/** The colour an image's placeholders are drawn in: its id. */
+function imageFg(img: Image): [number, number, number] {
+  return [(img.id >> 16) & 0xff, (img.id >> 8) & 0xff, img.id & 0xff];
+}
+
+/** Display math typeset by nb (Typst), by formula and colour: the image once it's there, or
+ *  "pending" / "failed" (the Unicode text shows meanwhile, or for good). Kept for the session. */
+const formulas = new Map<string, Image | "pending" | "failed">();
+
+/** The typeset image of a formula, or null while it's on its way (the notebook is redrawn when it
+ *  comes) or if Typst can't make it out. */
+function formulaImage(nb: Notebook, latex: string): Image | null {
+  if (!IMAGES) return null;
+  const color = themeHex("syntax.number", "#ff9e64");
+  const key = `${color} ${latex}`;
+  const known = formulas.get(key);
+  if (known !== undefined) return typeof known === "string" ? null : known;
+  formulas.set(key, "pending");
+  // rendered at twice the cell size, for HiDPI; the em as tall as a text row
+  const [, ch] = cellPixels();
+  const size = 14;
+  void ask(nb, "math", { latex, color, size, scale: (2 * ch) / size }).then((r) => {
+    const img = r.ok && typeof r.png === "string"
+      ? sendImage(r.png, Number(r.width), Number(r.height), 2)
+      : null;
+    formulas.set(key, img ?? "failed");
+    if (img) void decorate(nb);
+  });
+  return null;
+}
+
+/** A theme colour as `#rrggbb`, from the current theme's data; `fallback` if it can't be read. */
+function themeHex(key: string, fallback: string): string {
+  const name = String(editor.getConfig().theme ?? "");
+  const data = (editor.getThemeData(name) ?? editor.getThemeData(name.toLowerCase())) as Record<string, unknown> | null;
+  const [section, field] = key.split(".");
+  const v = (data?.[section] as Record<string, unknown> | undefined)?.[field];
+  if (!Array.isArray(v) || v.length !== 3) return fallback;
+  return "#" + v.map((c) => Math.max(0, Math.min(255, Number(c))).toString(16).padStart(2, "0")).join("");
 }
 
 /** The placeholder text of one image row. */
@@ -688,7 +735,7 @@ function outputLines(o: Output): OutLine[] {
       if (data["image/png"] && IMAGES) {
         const img = uploadImage(o, join(data["image/png"]).replace(/\s+/g, ""));
         if (img) {
-          const fg: [number, number, number] = [(img.id >> 16) & 0xff, (img.id >> 8) & 0xff, img.id & 0xff];
+          const fg = imageFg(img);
           return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));
         }
       }
@@ -703,14 +750,37 @@ function outputLines(o: Output): OutLine[] {
 /** A markdown cell as rendered text while the cursor is elsewhere (the `# ` prefixes, `#` heading
  *  marks, `**`, backticks and link targets hidden, math as Unicode), its source while editing it:
  *  every conceal is "unless the cursor is in this cell". The styles stay on in both. */
-function renderMarkdown(buf: number, s: Span, lineAt: Map<number, string>): void {
+function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>): void {
   const scope: [number, number] = [s.start, s.end + 1];
   const conceal = (start: number, end: number, with_: string) =>
     editor.addConceal(buf, NS_MD, start, end, with_, "unless-cursor-in", scope[0], scope[1]);
   const style = (start: number, end: number, o: Record<string, unknown>) => {
     if (end > start) editor.addOverlay(buf, NS_MD, start, end, o);
   };
-  let display = false; // inside a $$ … $$ block spread over lines
+  // a $$ … $$ block, on one line or spread over several: typeset by nb under the block (shown
+  // while editing it too, as a preview; the source hides once the cursor leaves), else as Unicode
+  let display: { latex: string[]; lines: number[] } | null = null;
+  const endDisplay = (block: { latex: string[]; lines: number[] }) => {
+    const latex = block.latex.join("\n").trim();
+    const img = latex ? formulaImage(nb, latex) : null;
+    for (const lineStart of block.lines) {
+      const raw = lineAt.get(lineStart) ?? "";
+      const prefix = /^# ?/.exec(raw)?.[0].length ?? 0;
+      const content = raw.slice(prefix);
+      const from = lineStart + bytes(raw.slice(0, prefix));
+      const to = from + bytes(content);
+      const bare = content.trim() === "$$";
+      const one = /^\s*\$\$(.+)\$\$\s*$/.exec(content);
+      conceal(from, to, img || bare ? "" : "    " + latexToUnicode(one ? one[1] : content));
+      style(from, to, { fg: "syntax.number" });
+    }
+    if (img) {
+      const fg = imageFg(img);
+      const last = block.lines[block.lines.length - 1];
+      for (let row = 0; row < img.rows; row++)
+        editor.addVirtualLine(buf, last, "    " + imageRow(img, row), { fg }, false, NS_OUT, 10 + row);
+    }
+  };
   for (const lineStart of s.lineStarts) {
     const raw = lineAt.get(lineStart) ?? "";
     const prefix = /^# ?/.exec(raw)?.[0].length ?? 0;
@@ -721,15 +791,21 @@ function renderMarkdown(buf: number, s: Span, lineAt: Map<number, string>): void
     conceal(lineStart, b(0), "   ");
     // prose in the text colour (it's a Python comment underneath)
     style(b(0), lineEnd, { fg: "editor.fg" });
+    if (display) {
+      display.lines.push(lineStart);
+      if (content.trim() === "$$") {
+        endDisplay(display);
+        display = null;
+      } else display.latex.push(content);
+      continue;
+    }
     if (content.trim() === "$$") {
-      display = !display;
-      conceal(b(0), lineEnd, "");
+      display = { latex: [], lines: [lineStart] };
       continue;
     }
     const block = /^\s*\$\$(.+)\$\$\s*$/.exec(content);
-    if (display || block) {
-      conceal(b(0), lineEnd, "    " + latexToUnicode(block ? block[1] : content));
-      style(b(0), lineEnd, { fg: "syntax.number" });
+    if (block) {
+      endDisplay({ latex: [block[1]], lines: [lineStart] });
       continue;
     }
     const heading = /^(#{1,6})\s+/.exec(content);
@@ -778,6 +854,7 @@ function renderMarkdown(buf: number, s: Span, lineAt: Map<number, string>): void
       style(b(m.innerStart), b(m.innerEnd), look);
     }
   }
+  if (display) endDisplay(display); // a block the cell never closes
 }
 
 async function decorate(nb: Notebook): Promise<void> {
@@ -824,7 +901,7 @@ async function decorate(nb: Notebook): Promise<void> {
       s.lineStarts.forEach((p, k) =>
         editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, p, "  ", { bg: "ui.notebook_cell_bg" }, true));
     }
-    if (s.cell.kind === "markdown") renderMarkdown(buf, s, lineAt);
+    if (s.cell.kind === "markdown") renderMarkdown(nb, buf, s, lineAt);
     if (!r || s.cell.kind !== "code") return;
     // long text output is cut; image rows are never (half a plot helps nobody)
     let shown = 0;
