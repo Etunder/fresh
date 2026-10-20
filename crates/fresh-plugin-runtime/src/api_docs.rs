@@ -93,6 +93,7 @@ const METHOD_PAGES: &[PageSpec] = &[
             "Reading Keys",
             "Dialogs & Widgets",
             "Popups & Menus",
+            "Completion",
         ],
     },
     PageSpec {

@@ -214,7 +214,11 @@ async function ask(nb: Notebook, verb: string, req?: unknown): Promise<Record<st
 
 function start(ipynb: string): Notebook {
   const dir = editor.pathDirname(ipynb);
-  const proc = editor.spawnBackgroundProcess(NB_COMMAND, ["serve", ipynb], dir);
+  const chosen = chosenKernels()[ipynb];
+  const args = ["serve", ipynb];
+  if (chosen?.python) args.push("--python", chosen.python);
+  else if (chosen?.kernel) args.push("--kernel", chosen.kernel);
+  const proc = editor.spawnBackgroundProcess(NB_COMMAND, args, dir);
   let markReady = () => {};
   const ready = new Promise<void>((resolve) => (markReady = resolve));
   const nb: Notebook = {
@@ -243,6 +247,25 @@ function start(ipynb: string): Notebook {
     }
   });
   return nb;
+}
+
+/** The kernels picked with "Notebook: Select Kernel", by notebook path (nb is started with them). */
+type Choice = { python?: string; kernel?: string };
+function chosenKernelsPath(): string {
+  return editor.pathJoin(editor.getDataDir(), "notebooks", "kernels.json");
+}
+function chosenKernels(): Record<string, Choice> {
+  try {
+    return JSON.parse(editor.readFile(chosenKernelsPath()) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function rememberKernel(ipynb: string, choice: Choice): void {
+  const all = chosenKernels();
+  all[ipynb] = choice;
+  editor.createDir(editor.pathDirname(chosenKernelsPath()));
+  editor.writeFile(chosenKernelsPath(), JSON.stringify(all, null, 1));
 }
 
 /** The working copy for a notebook: under the data dir, named after it so the tab reads well. */
@@ -341,6 +364,8 @@ function kernelBadge(nb: Notebook): string {
     }
     case "dead":
       return `○ ${name} stopped`;
+    case "selected":
+      return `○ ${name} not started`;
     default:
       return "○ no kernel yet";
   }
@@ -711,7 +736,60 @@ function dropStaleImages(): void {
 // ── drawing ──────────────────────────────────────────────────────────
 
 /** A line drawn under a cell: text in a theme colour, or one row of an image. */
-type OutLine = { text: string; fg: string | [number, number, number] };
+type OutLine = { text: string; fg: string | [number, number, number]; clip?: boolean };
+
+/** The cells of an HTML table's rows (`<th>`/`<td>`, tags inside stripped, entities decoded, a
+ *  `colspan` as that many cells) and the text after the table (pandas' "5 rows × 3 columns"); null
+ *  if there is no table. */
+export function htmlTable(html: string): { rows: { cells: string[]; head: boolean }[]; note: string } | null {
+  const table = /<table[\s\S]*?<\/table>/i.exec(html);
+  if (!table) return null;
+  const decode = (s: string) =>
+    s.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+      .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+      .replace(/&#39;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+  const rows: { cells: string[]; head: boolean }[] = [];
+  for (const tr of table[0].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells: string[] = [];
+    let head = true;
+    for (const c of tr[1].matchAll(/<(th|td)([^>]*)>([\s\S]*?)<\/\1>/gi)) {
+      if (c[1].toLowerCase() === "td") head = false;
+      const span = Number(/colspan="?(\d+)/i.exec(c[2])?.[1] ?? 1);
+      cells.push(decode(c[3]));
+      for (let k = 1; k < span; k++) cells.push("");
+    }
+    if (cells.length) rows.push({ cells, head });
+  }
+  if (!rows.length) return null;
+  const note = decode(html.slice(table.index + table[0].length));
+  return { rows, note };
+}
+
+/** A table as aligned rows: the header in the accent colour over a rule, numbers to the right. */
+function tableLines(t: { rows: { cells: string[]; head: boolean }[]; note: string }): OutLine[] {
+  const n = Math.max(...t.rows.map((r) => r.cells.length));
+  const width = (s: string) => editor.stringWidth(s);
+  const widths = Array.from({ length: n }, (_, c) => Math.max(...t.rows.map((r) => width(r.cells[c] ?? ""))));
+  const numeric = /^[-+]?(\d[\d,_]*\.?\d*|\.\d+)(e[-+]?\d+)?%?$|^(nan|NaN|inf|-inf|None|NaT|…|\.\.\.)$/;
+  const line = (r: { cells: string[]; head: boolean }) =>
+    widths.map((w, c) => {
+      const cell = r.cells[c] ?? "";
+      const pad = " ".repeat(w - width(cell));
+      return !r.head && numeric.test(cell) ? pad + cell : cell + pad;
+    }).join(" │ ");
+  const out: OutLine[] = [];
+  let headDone = false;
+  for (const r of t.rows) {
+    if (!r.head && !headDone && out.length) {
+      out.push({ text: widths.map((w) => "─".repeat(w)).join("─┼─"), fg: "editor.line_number_fg", clip: true });
+      headDone = true;
+    }
+    out.push({ text: line(r), fg: r.head ? "ui.tab_active_bg" : "editor.fg", clip: true });
+  }
+  if (t.note) out.push({ text: t.note, fg: "editor.line_number_fg" });
+  return out;
+}
 
 /** An output's lines: its text in the colour it draws in, or the rows of its image. */
 function outputLines(o: Output): OutLine[] {
@@ -739,6 +817,8 @@ function outputLines(o: Output): OutLine[] {
           return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));
         }
       }
+      const html = data["text/html"] !== undefined ? htmlTable(join(data["text/html"])) : null;
+      if (html) return tableLines(html);
       if (image) return [{ text: `▣ ${image}${data["text/plain"] ? "  " + join(data["text/plain"]).split("\n")[0] : ""}`, fg: "syntax.type" }];
       if (data["text/plain"] !== undefined) return lines(join(data["text/plain"]), "editor.fg");
       return [{ text: `[${kinds.join(", ")}]`, fg: "editor.line_number_fg" }];
@@ -916,7 +996,7 @@ async function decorate(nb: Notebook): Promise<void> {
     if (!out.length) return;
     out.forEach((l, j) =>
       // three columns in, level with the cell's code (its two-column margin plus the inlay space)
-      editor.addVirtualLine(buf, s.lastLine, "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined },
+      editor.addVirtualLine(buf, s.lastLine, "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined, clip: l.clip },
         false, NS_OUT, j + 1));
   });
   dropStaleImages();
@@ -937,6 +1017,8 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
   if (copyOf) {
     copyOf.bufferId = e.buffer_id;
     editor.setLineNumbersDefault(e.buffer_id, false);
+    // the kernel's completions, asked at once after a `.`
+    editor.registerCompletionSource(e.buffer_id, ".");
     showKernel(copyOf);
     if (copyOf.jsonBuffer !== null) editor.closeBuffer(copyOf.jsonBuffer, true);
     copyOf.jsonBuffer = null;
@@ -1046,6 +1128,126 @@ registerHandler("notebook_restart", async () => {
   await decorate(nb);
 });
 
+// ── the kernel's completions and docs ────────────────────────────────
+
+/** The code cell at a byte position of the working copy: its source up to there and after. */
+async function codeAt(nb: Notebook, position: number): Promise<{ before: string; code: string } | null> {
+  const spans = textToCells(await editor.getBufferText(nb.bufferId!));
+  const s = spans.find((s, k) => position >= s.start && (k === spans.length - 1 || position < spans[k + 1].start));
+  if (!s || s.cell.kind !== "code") return null;
+  const bodyStart = s.markerEnd > s.start ? s.markerEnd + 1 : s.start;
+  if (position < bodyStart) return null;
+  const before = await editor.getBufferText(nb.bufferId!, bodyStart, position);
+  const after = await editor.getBufferText(nb.bufferId!, position, Math.max(position, s.end));
+  return { before, code: before + after };
+}
+
+const KINDS: Record<string, string> = {
+  function: "function", method: "function", instance: "variable", statement: "variable",
+  module: "module", class: "class", keyword: "keyword", param: "property", property: "property",
+};
+
+registerHandler("notebook_complete", async (e: { buffer_id: number; request_id: number; position: number }) => {
+  const nb = [...byCopy.values()].find((n) => n.bufferId === e.buffer_id);
+  const items: PluginCompletionItem[] = [];
+  const at = nb ? await codeAt(nb, e.position) : null;
+  if (nb && at) {
+    const cursor = Array.from(at.before).length;
+    const r = await ask(nb, "complete", { code: at.code, cursor });
+    // the editor replaces the word before the cursor; the kernel says what it replaces (a dotted
+    // name, say): keep the part of each match from the word on
+    const word = /[\p{L}\p{N}_]*$/u.exec(at.before)![0];
+    const chars = Array.from(at.code);
+    const from = cursor - Array.from(word).length;
+    const start = Number(r.start ?? cursor);
+    const lead = chars.slice(start, from).join("");
+    const seen = new Set<string>();
+    for (const m of (r.matches ?? []) as { text: string; type?: string; signature?: string }[]) {
+      if (start > from || !m.text.startsWith(lead)) continue;
+      const label = m.text.slice(lead.length);
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      items.push({ label, kind: m.type ? KINDS[m.type] : undefined, detail: m.signature || m.type || undefined });
+    }
+  }
+  editor.supplyCompletions(e.request_id, items);
+});
+editor.on("completion_requested", "notebook_complete");
+
+registerHandler("notebook_docs", async () => {
+  const nb = active();
+  if (!nb) return;
+  const at = await codeAt(nb, editor.getCursorPosition());
+  if (!at) {
+    editor.setStatus("notebook: put the cursor on a name in a code cell");
+    return;
+  }
+  const r = await ask(nb, "inspect", { code: at.code, cursor: Array.from(at.before).length });
+  if (!r.ok || !r.found) {
+    editor.setStatus(`notebook: ${r.ok ? "the kernel knows nothing about this name" : r.message}`);
+    return;
+  }
+  const lines = String(r.text).replace(/\s+$/, "").split("\n");
+  const message = lines.slice(0, 40).join("\n") + (lines.length > 40 ? "\n…" : "");
+  editor.showActionPopup({
+    id: "notebook-docs",
+    title: "Documentation",
+    message,
+    actions: [{ id: "close", label: "Close" }],
+    buffer_id: nb.bufferId ?? undefined,
+  });
+});
+editor.registerCommand("Notebook: Show Documentation", "The kernel's signature and docstring for the name at the cursor", "notebook_docs", "notebook");
+
+// ── choosing the kernel ──────────────────────────────────────────────
+
+type KernelOption = { python?: string; kernel?: string; label: string; detail?: string; current: boolean };
+let kernelOptions: { nb: Notebook; options: KernelOption[] } | null = null;
+
+registerHandler("notebook_select_kernel", async () => {
+  const nb = active();
+  if (!nb) return;
+  const r = await ask(nb, "kernels");
+  if (!r.ok) {
+    editor.setStatus(`notebook: ${r.message}`);
+    return;
+  }
+  const options = r.options as KernelOption[];
+  kernelOptions = { nb, options };
+  editor.startPrompt("Kernel (or a python's path): ", "notebook-kernel");
+  editor.setPromptSuggestions(
+    options.map((o, i) => ({
+      id: String(i),
+      text: o.python ? shortKernelName(o.python) : o.label,
+      description: (o.current ? "● current  " : "") + (o.python ?? o.detail ?? ""),
+      value: String(i),
+    })),
+    Math.max(0, options.findIndex((o) => o.current)),
+  );
+});
+
+registerHandler("notebook_kernel_chosen", async (e: { prompt_type: string; input: string; selected_index: number | null }) => {
+  if (e.prompt_type !== "notebook-kernel" || !kernelOptions) return;
+  const { nb, options } = kernelOptions;
+  kernelOptions = null;
+  const picked = /^\d+$/.test(e.input) ? options[Number(e.input)] : undefined;
+  const choice: Choice = picked
+    ? picked.python ? { python: picked.python } : { kernel: picked.kernel }
+    : { python: e.input.trim() };
+  if (!choice.python && !choice.kernel) return;
+  const r = await ask(nb, "select", choice);
+  if (!r.ok) {
+    editor.setStatus(`notebook: ${r.message}`);
+    return;
+  }
+  rememberKernel(nb.ipynb, choice);
+  for (const run of nb.runs.values()) if (run.state === "busy" || run.state === "queued") run.state = "error";
+  editor.setStatus(`notebook: ${r.name}; the next run starts it`);
+  await decorate(nb);
+});
+editor.on("prompt_confirmed", "notebook_kernel_chosen");
+editor.registerCommand("Notebook: Select Kernel", "Choose the venv or Jupyter kernel this notebook runs on (remembered)", "notebook_select_kernel", "notebook");
+
 editor.registerCommand("Notebook: Run Cell", "Run the cell under the cursor and move to the next", "notebook_run_advance", "notebook");
 editor.registerCommand("Notebook: Run Cell and Stay", "Run the cell under the cursor", "notebook_run_stay", "notebook");
 editor.registerCommand("Notebook: Run All", "Run every code cell, top to bottom", "notebook_run_all", "notebook");
@@ -1065,6 +1267,7 @@ editor.defineMode("notebook", [
   ["S-Enter", "notebook_run_advance"],
   ["M-Enter", "notebook_run_advance"],
   ["C-Enter", "notebook_run_stay"],
+  ["M-k", "notebook_docs"],
 ], false);
 
 function followMode(): void {

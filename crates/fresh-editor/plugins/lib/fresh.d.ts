@@ -1064,6 +1064,27 @@ type ActionPopupOptions = {
 	buffer_id?: number;
 };
 /**
+* One completion a plugin offers for a buffer it registered with `registerCompletionSource`,
+* shown in the editor's completion popup beside the LSP's. `label` is the word that replaces the
+* one at the cursor (unless `insertText` says otherwise), and what the typed prefix filters on.
+*/
+type PluginCompletionItem = {
+	label: string;
+	/**
+	* Shown greyed beside the label (a type or signature).
+	*/
+	detail?: string;
+	/**
+	* The row's icon: "function", "method", "variable", "class", "module", "keyword",
+	* "property", "instance" (anything else shows none).
+	*/
+	kind?: string;
+	/**
+	* What is inserted in place of the word at the cursor, if not `label`.
+	*/
+	insertText?: string;
+};
+/**
 * Options for `editor.addMenuItem` — one plugin-contributed row in an
 * existing menu bar menu.
 *
@@ -7635,6 +7656,19 @@ interface EditorAPI {
 	*/
 	registerLspUriScheme(scheme: string): boolean;
 	/**
+	* Offer completions for a buffer: from now on the editor's completion requests on it (Ctrl+Space,
+	* or while typing when the popup shows by itself) fire the `completion_requested` hook, which
+	* the plugin answers with `supplyCompletions`; its items join the LSP's in the popup. Typing one
+	* of `triggerCharacters` (e.g. ".") asks at once.
+	*/
+	registerCompletionSource(bufferId: number, triggerCharacters: string): boolean;
+	/**
+	* Answer a `completion_requested` hook (an empty list is an answer too: the popup then
+	* shows the other sources alone). Answers to a request the editor has moved on from are
+	* dropped.
+	*/
+	supplyCompletions(requestId: number, items: PluginCompletionItem[]): boolean;
+	/**
 	* Mark the buffer backing `path` read-only. Race-free right after
 	* `openFile` because both are FIFO commands.
 	*/
@@ -8911,6 +8945,16 @@ interface HookEventMap {
 		character: number;
 		language: string;
 		server_name: string;
+	};
+	/**
+	* The editor wants completions at `position` (a byte offset) in a buffer this plugin
+	* registered with `registerCompletionSource`. Answer with
+	* `editor.supplyCompletions(request_id, items)`.
+	*/
+	completion_requested: {
+		buffer_id: number;
+		request_id: number;
+		position: number;
 	};
 	// ── UI events ────────────────────────────────────────────────────────────
 	/** The user chose an action in a popup opened with `editor.showActionPopup`. */

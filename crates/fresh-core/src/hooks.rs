@@ -331,6 +331,14 @@ pub enum HookArgs {
         server_name: String,
     },
 
+    /// The editor wants completions at `position` (a byte offset) in a buffer a plugin registered
+    /// with `registerCompletionSource`; the plugin answers with `supplyCompletions(request_id, …)`.
+    CompletionRequested {
+        buffer_id: BufferId,
+        request_id: u64,
+        position: usize,
+    },
+
     /// Mouse click event
     MouseClick {
         /// Column (x coordinate) in screen cells

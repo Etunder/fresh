@@ -67,7 +67,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
-                if req["code"].startswith("plot"):
+                if req["code"].startswith("table"):
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
+                                     "data": {"text/plain": "   fund  ret\n0  Alpha  1.5", "text/html":
+                                              '<div><style scoped>.dataframe {}</style><table border="1" class="dataframe">'
+                                              '<thead><tr style="text-align: right;"><th></th><th>fund</th><th>return</th></tr></thead>'
+                                              '<tbody><tr><th>0</th><td>Alpha &amp; Co</td><td>1.5</td></tr>'
+                                              '<tr><th>1</th><td>Beta</td><td>-12.25</td></tr></tbody></table>'
+                                              '<p>2 rows × 2 columns</p></div>'}}})
+                elif req["code"].startswith("plot"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "display_data", "metadata": {},
                                      "data": {"image/png": PNG, "text/plain": "<Figure 80x48>"}}})
@@ -79,6 +88,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with open(os.path.join(os.path.dirname(notebook), "math.json"), "w") as f:
                     json.dump(req, f)
                 body.update({"png": PNG, "width": 80, "height": 48})
+            elif url.path == "/complete":
+                with open(os.path.join(os.path.dirname(notebook), "complete.json"), "w") as f:
+                    json.dump(req, f)
+                code, cursor = req["code"], req["cursor"]
+                if code[:cursor].endswith("os."):
+                    body.update({"matches": [{"text": "path", "type": "module"}, {"text": "pardir", "type": "instance"}],
+                                 "start": cursor, "end": cursor})
+                else:
+                    # a qualified match, as IPython sends without jedi, and a typed one
+                    body.update({"matches": [{"text": "fruit_basket", "type": "instance", "signature": ""},
+                                             {"text": "fruit_salad", "type": "class"}],
+                                 "start": cursor - 3, "end": cursor})
+            elif url.path == "/inspect":
+                body.update({"found": True, "text": "Signature: len(obj, /)\nDocstring: Return the number of items in a container."})
+            elif url.path == "/kernels":
+                body.update({"current": "/work/.venv/bin/python", "options": [
+                    {"python": "/work/.venv/bin/python", "label": "/work/.venv/bin/python", "current": True},
+                    {"kernel": "other", "label": "Other Kernel", "detail": "/usr/bin/python3", "current": False}]})
+            elif url.path == "/select":
+                with open(os.path.join(os.path.dirname(notebook), "selected.json"), "w") as f:
+                    json.dump(req, f)
+                emit({"event": "kernel", "state": "selected", "name": "Other Kernel"})
+                body["name"] = "Other Kernel"
             elif url.path == "/interrupt":
                 open(os.path.join(os.path.dirname(notebook), "interrupted"), "w").close()
             elif url.path == "/save":
@@ -152,6 +184,11 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     .unwrap();
     h.wait_until(|h| h.get_status_bar().contains("○ no kernel yet"))
         .unwrap();
+    // the working copy lives under the data dir, whose other files open read-only
+    assert!(
+        !h.editor().active_window().is_editing_disabled(),
+        "a notebook can be edited"
+    );
     let screen = h.screen_to_string();
     assert!(
         !screen.contains("nbformat"),
@@ -342,6 +379,151 @@ fn display_math_is_typeset_as_an_image() {
     assert!(
         !screen.contains("e^{"),
         "no Unicode fallback once typeset:\n{screen}"
+    );
+    h.assert_no_plugin_errors();
+}
+
+const CODE_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "code", "metadata": {}, "outputs": [],
+   "source": ["import os\n", "fru"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// The kernel's completions in the editor's popup (Ctrl+Space, and at once after a `.`), its docs
+/// on Alt+K, and the kernel picker.
+#[test]
+fn the_kernel_completes_documents_and_can_be_chosen() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("code.ipynb");
+    fs::write(&nb_path, CODE_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    // the end of `fru` (the working copy ends with a newline)
+    h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
+    h.send_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
+
+    // Ctrl+Space: the kernel's names for the word at the cursor
+    h.send_key(KeyCode::Char(' '), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("fruit_basket"))
+        .unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("complete.json")).unwrap()).unwrap();
+    assert_eq!(
+        req,
+        serde_json::json!({"code": "import os\nfru\n", "cursor": 13})
+    );
+    assert!(h.screen_to_string().contains("fruit_salad"));
+    h.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("fruit_basket") && !s.contains("fruit_salad")
+    })
+    .unwrap();
+
+    // a `.` asks at once
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    h.type_text("os.").unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("pardir"))
+        .unwrap();
+    h.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("os.path"))
+        .unwrap();
+
+    // Alt+K: the docs of the name at the cursor
+    h.send_key(KeyCode::Char('k'), KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("Return the number of items"))
+        .unwrap();
+    h.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
+
+    // the picker lists what nb offers; the choice goes to nb and is remembered
+    h.send_key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_for_prompt().unwrap();
+    h.type_text("Notebook: Select Kernel").unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("Other Kernel"))
+        .unwrap();
+    h.type_text("other").unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    let selected = project.join("selected.json");
+    h.wait_until(|_| selected.exists()).unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&selected).unwrap()).unwrap();
+    assert_eq!(req, serde_json::json!({"kernel": "other"}));
+    h.wait_until(|h| h.get_status_bar().contains("○ Other Kernel not started"))
+        .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+const TABLE_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "df", "metadata": {}, "outputs": [],
+   "source": ["table()"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// A DataFrame's HTML comes out as an aligned table: the header over a rule, numbers to the right,
+/// pandas' size note under it.
+#[test]
+fn an_html_table_is_drawn_as_a_text_table() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("df.ipynb");
+    fs::write(&nb_path, TABLE_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("2 rows × 2 columns"))
+        .unwrap();
+    let screen = h.screen_to_string();
+    let rows: Vec<&str> = screen
+        .lines()
+        .filter(|l| l.contains('│') || l.contains('┼'))
+        .map(|l| l.trim_end())
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            "     │ fund       │ return",
+            "   ──┼────────────┼───────",
+            "   0 │ Alpha & Co │    1.5",
+            "   1 │ Beta       │ -12.25",
+        ]
+        .map(|r| r.to_string()),
+        "{screen}"
     );
     h.assert_no_plugin_errors();
 }

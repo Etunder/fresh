@@ -1019,6 +1019,10 @@ pub struct Editor {
     /// `jdt://`, …) out of the core: the core only dispatches by scheme.
     pub(crate) lsp_uri_schemes: std::collections::HashSet<String>,
 
+    /// Buffers a plugin offers completions for (`registerCompletionSource`), with the characters
+    /// that ask for them at once. Their requests go out as the `completion_requested` hook.
+    pub(crate) plugin_completion_sources: std::collections::HashMap<BufferId, String>,
+
     /// Plugin manager (handles both enabled and disabled cases)
     /// Plugin manager, wrapped in `Arc<RwLock<>>` so windows can fire
     /// hooks (`run_hook`) via WindowResources without holding an

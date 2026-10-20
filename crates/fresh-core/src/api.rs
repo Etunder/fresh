@@ -5696,6 +5696,20 @@ pub enum PluginCommand {
         scheme: String,
     },
 
+    /// Offer completions for a buffer: the editor's completion requests on it fire the
+    /// `completion_requested` hook, answered with `SupplyCompletions`. Typing one of
+    /// `trigger_characters` asks at once.
+    RegisterCompletionSource {
+        buffer_id: BufferId,
+        trigger_characters: String,
+    },
+
+    /// A plugin's answer to a `completion_requested` hook.
+    SupplyCompletions {
+        request_id: u64,
+        items: Vec<PluginCompletionItem>,
+    },
+
     /// Mark the buffer backing `path` read-only. Resolved by path (not
     /// buffer id) so it is race-free when issued right after `openFile`:
     /// both are FIFO commands, so the buffer exists by the time this runs,
@@ -6727,6 +6741,29 @@ impl AddMenuItemOptions {
     }
 }
 
+/// One completion a plugin offers for a buffer it registered with `registerCompletionSource`,
+/// shown in the editor's completion popup beside the LSP's. `label` is the word that replaces the
+/// one at the cursor (unless `insertText` says otherwise), and what the typed prefix filters on.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(export, rename_all = "camelCase")]
+pub struct PluginCompletionItem {
+    pub label: String,
+    /// Shown greyed beside the label (a type or signature).
+    #[serde(default)]
+    #[ts(optional)]
+    pub detail: Option<String>,
+    /// The row's icon: "function", "method", "variable", "class", "module", "keyword",
+    /// "property", "instance" (anything else shows none).
+    #[serde(default)]
+    #[ts(optional)]
+    pub kind: Option<String>,
+    /// What is inserted in place of the word at the cursor, if not `label`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub insert_text: Option<String>,
+}
+
 /// Options for showActionPopup
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -7600,6 +7637,7 @@ mod fromjs_impls {
         ActionSpec,
         ActionPopupAction,
         ActionPopupOptions,
+        PluginCompletionItem,
         AddMenuItemOptions,
         LspMenuItem,
         ViewTokenWire,

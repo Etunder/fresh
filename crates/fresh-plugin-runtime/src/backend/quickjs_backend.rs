@@ -90,8 +90,8 @@ use anyhow::{anyhow, Result};
 use fresh_core::api::{
     ActionSpec, BufferInfo, CompositeHunk, CreateCompositeBufferOptions, EditorStateSnapshot,
     GrammarInfoSnapshot, JsCallbackId, LanguagePackConfig, LspServerPackConfig, OverlayOptions,
-    PluginCommand, PluginMarker, PluginResponse, ScrollbarMarker, SearchHandleRegistry,
-    SearchHandleState, SearchTakeResult, SplitWindowOptions, SyntaxRegion,
+    PluginCommand, PluginCompletionItem, PluginMarker, PluginResponse, ScrollbarMarker,
+    SearchHandleRegistry, SearchHandleState, SearchTakeResult, SplitWindowOptions, SyntaxRegion,
 };
 use fresh_core::command::Command;
 use fresh_core::overlay::OverlayNamespace;
@@ -7626,6 +7626,29 @@ impl JsEditorApi {
     pub fn register_lsp_uri_scheme(&self, scheme: String) -> bool {
         self.command_sender
             .send(PluginCommand::RegisterLspUriScheme { scheme })
+            .is_ok()
+    }
+
+    #[plugin_api(section = "Completion")]
+    /// Offer completions for a buffer: from now on the editor's completion requests on it (Ctrl+Space,
+    /// or while typing when the popup shows by itself) fire the `completion_requested` hook, which
+    /// the plugin answers with `supplyCompletions`; its items join the LSP's in the popup. Typing one
+    /// of `triggerCharacters` (e.g. ".") asks at once.
+    pub fn register_completion_source(&self, buffer_id: u32, trigger_characters: String) -> bool {
+        self.command_sender
+            .send(PluginCommand::RegisterCompletionSource {
+                buffer_id: BufferId(buffer_id as usize),
+                trigger_characters,
+            })
+            .is_ok()
+    }
+
+    /// Answer a `completion_requested` hook (an empty list is an answer too: the popup then
+    /// shows the other sources alone). Answers to a request the editor has moved on from are
+    /// dropped.
+    pub fn supply_completions(&self, request_id: u64, items: Vec<PluginCompletionItem>) -> bool {
+        self.command_sender
+            .send(PluginCommand::SupplyCompletions { request_id, items })
             .is_ok()
     }
 

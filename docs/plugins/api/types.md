@@ -3429,6 +3429,31 @@ type PluginAnimationKind = {
 };
 ```
 
+### `PluginCompletionItem`
+
+One completion a plugin offers for a buffer it registered with `registerCompletionSource`,
+shown in the editor's completion popup beside the LSP's. `label` is the word that replaces the
+one at the cursor (unless `insertText` says otherwise), and what the typed prefix filters on.
+
+```typescript
+type PluginCompletionItem = {
+  label: string;
+  /**
+  * Shown greyed beside the label (a type or signature).
+  */
+  detail?: string;
+  /**
+  * The row's icon: "function", "method", "variable", "class", "module", "keyword",
+  * "property", "instance" (anything else shows none).
+  */
+  kind?: string;
+  /**
+  * What is inserted in place of the word at the cursor, if not `label`.
+  */
+  insertText?: string;
+};
+```
+
 ### `PreparingWindowResult`
 
 Result of `createPreparingWindow` — the ids of the placeholder window,

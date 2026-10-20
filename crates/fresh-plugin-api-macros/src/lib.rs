@@ -491,6 +491,7 @@ fn rust_to_typescript(ty: &Type, attrs: &[Attribute]) -> String {
                 | "ActionSpec"
                 | "ActionPopupAction"
                 | "ActionPopupOptions"
+                | "PluginCompletionItem"
                 | "ViewTokenWire"
                 | "ViewTokenStyle"
                 | "TokenColor"

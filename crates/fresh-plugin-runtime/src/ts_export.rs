@@ -23,10 +23,10 @@ use fresh_core::api::{
     GrammarInfoSnapshot, GrepMatch, JsDiagnostic, JsPosition, JsRange, JsTextPropertyEntry,
     KeyEventPayload, LanguagePackConfig, LayoutHints, LineDiffHunk, LspServerPackConfig,
     OverlayColorSpec, OverlayOptions, PluginAnimationEdge, PluginAnimationKind,
-    ProcessLimitsPackConfig, RemoteBackendInfo, ReplaceResult, ScreenSize, ScrollbarMarker,
-    SearchTakeResult, SpawnResult, SplitSnapshot, TerminalResult, TextPropertiesAtCursor,
-    TokenColor, TsHighlightSpan, ViewTokenStyle, ViewTokenWire, ViewTokenWireKind, ViewportInfo,
-    VirtualBufferResult, WindowInfo,
+    PluginCompletionItem, ProcessLimitsPackConfig, RemoteBackendInfo, ReplaceResult, ScreenSize,
+    ScrollbarMarker, SearchTakeResult, SpawnResult, SplitSnapshot, TerminalResult,
+    TextPropertiesAtCursor, TokenColor, TsHighlightSpan, ViewTokenStyle, ViewTokenWire,
+    ViewTokenWireKind, ViewportInfo, VirtualBufferResult, WindowInfo,
 };
 use fresh_core::command::Suggestion;
 use fresh_core::file_explorer::{
@@ -127,6 +127,7 @@ fn get_type_decl(type_name: &str) -> Option<String> {
         // UI types (ts-rs renames these with Ts prefix)
         "TsActionPopupAction" | "ActionPopupAction" => Some(decl_with_docs::<ActionPopupAction>(&cfg)),
         "ActionPopupOptions" => Some(decl_with_docs::<ActionPopupOptions>(&cfg)),
+        "PluginCompletionItem" => Some(decl_with_docs::<PluginCompletionItem>(&cfg)),
         "AddMenuItemOptions" => Some(decl_with_docs::<fresh_core::api::AddMenuItemOptions>(&cfg)),
         "TsLspMenuItem" | "LspMenuItem" => Some(decl_with_docs::<fresh_core::api::LspMenuItem>(&cfg)),
         "TsHighlightSpan" => Some(decl_with_docs::<TsHighlightSpan>(&cfg)),
@@ -393,6 +394,7 @@ const DEPENDENCY_TYPES: &[&str] = &[
     "ActionSpec",                      // Used by executeActions
     "TsActionPopupAction",             // Used by ActionPopupOptions.actions
     "ActionPopupOptions",              // Used by showActionPopup
+    "PluginCompletionItem",            // Used by supplyCompletions
     "AddMenuItemOptions",              // Used by addMenuItem
     "TsLspMenuItem",                   // Used by setLspMenuContributions
     "FileExplorerDecoration",          // Used by setFileExplorerDecorations
@@ -971,6 +973,17 @@ interface HookEventMap {
     character: number;
     language: string;
     server_name: string;
+  };
+
+  /**
+   * The editor wants completions at `position` (a byte offset) in a buffer this plugin
+   * registered with `registerCompletionSource`. Answer with
+   * `editor.supplyCompletions(request_id, items)`.
+   */
+  completion_requested: {
+    buffer_id: number;
+    request_id: number;
+    position: number;
   };
 
   // ── UI events ────────────────────────────────────────────────────────────
