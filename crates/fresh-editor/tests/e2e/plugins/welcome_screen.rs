@@ -259,7 +259,7 @@ fn welcome_screen_renders_its_three_doors() {
     let (mut harness, _tmp) = harness_with_welcome();
     open_welcome(&mut harness);
     let screen = harness.screen_to_string();
-    for door in ["JUST EDIT TEXT", "CLASSIC IDE", "ORCHESTRATE"] {
+    for door in ["JUST EDIT TEXT", "CLASSIC IDE", "GO FURTHER"] {
         assert!(
             screen.contains(door),
             "door {door:?} missing from:\n{screen}"
@@ -552,7 +552,7 @@ fn a_welcome_tab_opened_behind_a_file_paints_correctly_when_shown() {
         .unwrap_or_default()
         .to_string();
     assert!(
-        doors.contains("CLASSIC IDE") && doors.contains("ORCHESTRATE"),
+        doors.contains("CLASSIC IDE") && doors.contains("GO FURTHER"),
         "the page painted at a measure its pane cannot hold — the three \
          doors are no longer one row. Screen:\n{screen}"
     );
@@ -626,16 +626,15 @@ fn opening_a_file_leaves_a_welcome_page_the_reader_was_looking_at() {
 /// the top row, and the reader was left with two "you are here" markers
 /// pointing at different things.
 ///
-/// The first two Tab stops are the orchestrator switch and the startup
-/// switch, which share the page's own first row — where the caret already
-/// is — so it is the *third* Tab, onto the first door card, that has a
-/// move to make.
+/// The first Tab stop is the startup switch, on the page's own first row
+/// — where the caret already is — so it is the *second* Tab, onto the
+/// first door card, that has a move to make.
 #[test]
 fn tab_brings_the_caret_to_the_control_it_focused() {
     let (mut harness, _tmp) = harness_with_welcome();
     open_welcome(&mut harness);
 
-    for _ in 0..3 {
+    for _ in 0..2 {
         harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     }
     harness.wait_for_async_quiescence(4).unwrap();
@@ -666,9 +665,9 @@ fn moving_the_caret_onto_prose_disarms_the_focused_control() {
     let (mut harness, _tmp) = harness_with_welcome();
     open_welcome(&mut harness);
 
-    // Twice: past the orchestrator switch, onto the startup switch — the
-    // control this test then proves was *not* fired.
-    for _ in 0..2 {
+    // Once: onto the startup switch — the control this test then proves
+    // was *not* fired.
+    for _ in 0..1 {
         harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     }
     harness.wait_for_async_quiescence(4).unwrap();
@@ -783,9 +782,8 @@ fn tab_between_two_cards_on_one_row_carries_the_caret_across_it() {
     let (mut harness, _tmp) = harness_with_welcome();
     open_welcome(&mut harness);
 
-    // Three Tabs: past the two switches on the first row, onto the first
-    // door.
-    for _ in 0..3 {
+    // Two Tabs: past the switch on the first row, onto the first door.
+    for _ in 0..2 {
         harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     }
     harness.wait_for_async_quiescence(4).unwrap();
@@ -833,7 +831,7 @@ fn tab_after_reading_down_the_page_does_not_jump_back_to_the_top() {
 
     // Read down to Level 3. A banner is not a Tab stop and the rows
     // around it are prose, so nothing is focused when we arrive.
-    scroll_until(&mut harness, "The Orchestrator dock");
+    scroll_until(&mut harness, "Code tours");
 
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.wait_for_async_quiescence(4).unwrap();
@@ -845,7 +843,7 @@ fn tab_after_reading_down_the_page_does_not_jump_back_to_the_top() {
          Screen:\n{screen}"
     );
     assert!(
-        screen.contains("The Orchestrator dock"),
+        screen.contains("Code tours"),
         "Tab left Level 3 entirely. Screen:\n{screen}"
     );
 }
@@ -862,9 +860,8 @@ fn a_caret_seated_by_tab_keeps_its_column_on_the_next_arrow_key() {
     let (mut harness, _tmp) = harness_with_welcome();
     open_welcome(&mut harness);
 
-    // Four Tabs: the two first-row switches, then the first and second
-    // doors.
-    for _ in 0..4 {
+    // Three Tabs: the first-row switch, then the first and second doors.
+    for _ in 0..3 {
         harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     }
     harness.wait_for_async_quiescence(4).unwrap();
@@ -1014,7 +1011,7 @@ fn the_contents_button_puts_the_pages_outline_in_the_sidebar() {
     for entry in [
         "LEVEL 1 · JUST EDIT",
         "LEVEL 2 · IT'S A PROJECT NOW",
-        "LEVEL 3 · MANY TASKS AT ONCE",
+        "LEVEL 3 · GOING FURTHER",
         "Review Diff",
     ] {
         assert!(
@@ -1295,8 +1292,8 @@ fn the_code_sample_box_holds_its_whole_listing() {
 
 /// **Focus follows the reader onto a control, not merely onto its row.**
 /// The startup switch is right-aligned on the page's first row, with a
-/// wide empty gap between it and the orchestrator switch at the row's
-/// left — and every column of that gap used to resolve to one of them,
+/// wide empty gap to its left — and every column of that gap used to
+/// resolve to a control,
 /// because the rule was "nearest control on the row, no distance cap". A
 /// reader walking down the page's left margin lit the switch up and armed
 /// Enter on it from forty columns away.

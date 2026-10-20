@@ -322,9 +322,10 @@ fn test_plugin_toggle_mouse_click_chip_matches_visual_position() {
     harness
         .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
         .unwrap();
-    harness.type_text("AutoOpen").unwrap();
+    // the setting's path, so the search lands on dashboard's toggle and no other autoOpen
+    harness.type_text("dashboard/autoOpen").unwrap();
     harness.render().unwrap();
-    harness.assert_screen_contains("AutoOpen");
+    harness.assert_screen_contains("dashboard/autoOpen");
     harness
         .send_key(KeyCode::Enter, KeyModifiers::NONE)
         .unwrap();

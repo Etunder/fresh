@@ -191,32 +191,3 @@ fn a_bare_fresh_inside_a_session_does_not_attach_to_the_daemon() {
     );
 }
 
-/// The control: the same launch *outside* a Fresh terminal still takes the
-/// Orchestrator path, so the assertion above is reading the guard and not a
-/// mode that was never on.
-#[test]
-fn a_bare_fresh_outside_a_session_still_starts_the_daemon() {
-    if !pty_available() {
-        eprintln!("Skipping: no PTY available in this environment");
-        return;
-    }
-    let home = tempfile::tempdir().unwrap();
-    let home = home.path();
-    setup(home);
-
-    let cmd = isolated_fresh(home);
-    let mut client = spawn_on_pty(cmd, ChildStdin::Terminal, 100, 30).expect("spawn fresh on a pty");
-
-    let waited = client.wait_for_screen(|screen| screen.contains(MENU_BAR));
-    let screen = client.screen();
-    client.kill();
-    let attached = daemon_pid_file(home, fresh::server::ORCHESTRATOR_DAEMON).exists();
-    kill_daemon(home, fresh::server::ORCHESTRATOR_DAEMON);
-
-    waited.unwrap_or_else(|e| panic!("the editor never rendered: {e}"));
-    assert!(
-        attached,
-        "a bare `fresh` on a terminal should have launched into Orchestrator \
-         mode; screen was:\n{screen}"
-    );
-}

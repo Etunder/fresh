@@ -242,7 +242,7 @@ let outlineSelected = "";
 const LEVEL_MARK: Record<string, string> = {
   "1": "LEVEL 1 · JUST EDIT",
   "2": "LEVEL 2 · IT'S A PROJECT NOW",
-  "3": "LEVEL 3 · MANY TASKS AT ONCE",
+  "3": "LEVEL 3 · GOING FURTHER",
 };
 
 // ── Small helpers ────────────────────────────────────────────────────
