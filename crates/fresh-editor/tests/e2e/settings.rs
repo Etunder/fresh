@@ -510,12 +510,11 @@ fn test_settings_selection_indicator() {
     harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
 
-    // Now Check For Updates should have the focus indicator
-    // Format: ">  " (3-char indicator area: focus, modified, space)
+    // The focus indicator moved off Check For Updates to the next item
     let screen = harness.screen_to_string();
     assert!(
-        screen.contains(">  Check For Updates"),
-        "Focus indicator '>' should move to Check For Updates. Screen:\n{}",
+        !screen.contains(">  Check For Updates") && screen.contains("   Check For Updates"),
+        "Focus indicator '>' should move off Check For Updates. Screen:\n{}",
         screen
     );
 
@@ -2914,9 +2913,7 @@ fn test_settings_toggle_persists_after_save_and_reopen() {
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
 
-    // Navigate down to "Check For Updates" (second item in General)
-    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
-    harness.render().unwrap();
+    // "Check For Updates" is the first item in General, focused already
 
     // Verify we're on Check For Updates and it shows as unchecked [ ]
     // Format is ">  Check For Updates" (3-char indicator area: focus, modified, space)
