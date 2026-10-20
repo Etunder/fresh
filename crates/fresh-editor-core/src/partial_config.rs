@@ -212,6 +212,7 @@ pub struct PartialEditorConfig {
     pub quick_suggestions_delay_ms: Option<u64>,
     pub suggest_on_trigger_characters: Option<bool>,
     pub show_menu_bar: Option<bool>,
+    pub chrome_style: Option<crate::config::ChromeStyle>,
     pub screensaver_enabled: Option<bool>,
     pub screensaver_idle_minutes: Option<u32>,
     pub menu_bar_mnemonics: Option<bool>,
@@ -336,6 +337,7 @@ impl Merge for PartialEditorConfig {
         self.suggest_on_trigger_characters
             .merge_from(&other.suggest_on_trigger_characters);
         self.show_menu_bar.merge_from(&other.show_menu_bar);
+        self.chrome_style.merge_from(&other.chrome_style);
         self.screensaver_enabled
             .merge_from(&other.screensaver_enabled);
         self.screensaver_idle_minutes
@@ -731,6 +733,7 @@ impl From<&crate::config::EditorConfig> for PartialEditorConfig {
             quick_suggestions_delay_ms: Some(cfg.quick_suggestions_delay_ms),
             suggest_on_trigger_characters: Some(cfg.suggest_on_trigger_characters),
             show_menu_bar: Some(cfg.show_menu_bar),
+            chrome_style: Some(cfg.chrome_style),
             screensaver_enabled: Some(cfg.screensaver_enabled),
             screensaver_idle_minutes: Some(cfg.screensaver_idle_minutes),
             menu_bar_mnemonics: Some(cfg.menu_bar_mnemonics),
@@ -904,6 +907,7 @@ impl PartialEditorConfig {
                 .suggest_on_trigger_characters
                 .unwrap_or(defaults.suggest_on_trigger_characters),
             show_menu_bar: self.show_menu_bar.unwrap_or(defaults.show_menu_bar),
+            chrome_style: self.chrome_style.unwrap_or(defaults.chrome_style),
             screensaver_enabled: self
                 .screensaver_enabled
                 .unwrap_or(defaults.screensaver_enabled),

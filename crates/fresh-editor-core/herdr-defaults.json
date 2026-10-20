@@ -1,0 +1,28 @@
+{
+  "theme": "herdr",
+  "editor": {
+    "show_menu_bar": false,
+    "chrome_style": "herdr",
+    "status_bar": {
+      "left": [
+        "{trust}",
+        "{terminal_restart}",
+        "{cursor}",
+        "{diagnostics}",
+        "{cursor_count}",
+        "{messages}"
+      ],
+      "right": [
+        "{read_only}",
+        "{line_ending}",
+        "{encoding}",
+        "{language}",
+        "{lsp}",
+        "{warnings}",
+        "{update}",
+        "{palette}"
+      ],
+      "separator": "·"
+    }
+  }
+}

@@ -2996,6 +2996,7 @@ impl Window {
                     hover_plus: hover_plus == Some(leaf),
                     reveal: Some(self.tab_reveal_for(leaf)),
                     preview_label: preview_label.clone(),
+                    herdr: false,
                 },
             );
         }

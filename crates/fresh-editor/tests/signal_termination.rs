@@ -40,7 +40,7 @@ fn isolated_fresh(home: &Path) -> Command {
     std::fs::create_dir_all(&config_dir).expect("create the isolated config dir");
     std::fs::write(
         config_dir.join("config.json"),
-        "{\n  \"orchestrator_mode\": false,\n  \"check_for_updates\": false\n}\n",
+        "{\n  \"check_for_updates\": false,\n  \"editor\": {\"show_menu_bar\": true}\n}\n",
     )
     .expect("write the isolated config");
 

@@ -382,6 +382,39 @@ impl JsonSchema for LineEndingOption {
     }
 }
 
+/// How the editor's chrome (tab bar, status bar, file explorer) is laid out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChromeStyle {
+    /// Fresh's own layout.
+    #[default]
+    Fresh,
+    /// The herdr multiplexer's: tabs as chips with a close mark only on hover, a mode-bar status
+    /// line, a sidebar-style file explorer (see docs/herdr/style.md).
+    Herdr,
+}
+
+impl ChromeStyle {
+    pub fn is_herdr(self) -> bool {
+        self == Self::Herdr
+    }
+}
+
+impl JsonSchema for ChromeStyle {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ChromeStyle")
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "How the editor's chrome is laid out",
+            "type": "string",
+            "enum": ["fresh", "herdr"],
+            "default": "fresh"
+        })
+    }
+}
+
 /// Where the cursor may move beyond the end of a line (virtual space).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1186,6 +1219,13 @@ pub struct EditorConfig {
     #[schemars(extend("x-section" = "Display"))]
     pub show_menu_bar: bool,
 
+    /// Layout of the tab bar, status bar and file explorer. "fresh": Fresh's own. "herdr": like
+    /// the herdr multiplexer (tab chips, close mark on hover, mode-bar status line).
+    /// Default: "fresh"; the herdr edition ships "herdr".
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Display"))]
+    pub chrome_style: ChromeStyle,
+
     /// Show a wave-animation screensaver after `screensaver_idle_minutes` with no
     /// input. Any key or mouse move ends it. Default: false
     #[serde(default = "default_false")]
@@ -1813,6 +1853,7 @@ impl Default for EditorConfig {
             quick_suggestions_delay_ms: default_quick_suggestions_delay(),
             suggest_on_trigger_characters: true,
             show_menu_bar: true,
+            chrome_style: ChromeStyle::default(),
             screensaver_enabled: false,
             screensaver_idle_minutes: default_screensaver_idle_minutes(),
             menu_bar_mnemonics: true,

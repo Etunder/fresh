@@ -5,7 +5,11 @@ This is a fork of [Fresh](https://github.com/sinelaw/fresh) for the wr/herdr tea
 in WezTerm on Windows, so the fork:
 
 - **looks like herdr**: the built-in `herdr` theme is the default (herdr's Tokyo Night palette), and
-  the chrome is restyled after herdr's (see [style.md](style.md));
+  the chrome is restyled after herdr's (see [style.md](style.md)). The fork's defaults live in
+  `crates/fresh-editor-core/herdr-defaults.json`, a config layer under the user's own config, so any
+  of them can be changed back in settings: `"theme"`, `"editor.show_menu_bar"`,
+  `"editor.chrome_style": "fresh"` (Fresh's own tab bar and layout), `"editor.status_bar"`. The test
+  suite builds on `Config::default()`, which stays upstream's;
 - **will open Jupyter notebooks natively**, with kitty images, using the `nb` kernel library from
   herdr-wr (plan: `herdr-wr/docs/notebook-plan.md`);
 - **drops what herdr already does**: no Orchestrator (workspaces, agent sessions, the dock);
