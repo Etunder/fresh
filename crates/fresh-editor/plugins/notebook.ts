@@ -1071,7 +1071,7 @@ function outputLines(nb: Notebook, o: Output): OutLine[] {
 /** A markdown cell as rendered text while the cursor is elsewhere (the `# ` prefixes, `#` heading
  *  marks, `**`, backticks and link targets hidden, math as Unicode), its source while editing it:
  *  every conceal is "unless the cursor is in this cell". The styles stay on in both. */
-function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>): void {
+function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>, editing = false): void {
   const scope: [number, number] = [s.start, s.end + 1];
   const conceal = (start: number, end: number, with_: string) =>
     editor.addConceal(buf, NS_MD, start, end, with_, "unless-cursor-in", scope[0], scope[1]);
@@ -1134,7 +1134,8 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
       const level = heading[1].length;
       conceal(b(0), b(heading[0].length), "");
       style(b(heading[0].length), lineEnd, level <= 2 ? { fg: "ui.tab_active_bg", bold: true } : { fg: "editor.fg", bold: true });
-      if (level <= 2) {
+      // (not while the cell is edited in its box: the rule would cut it)
+      if (level <= 2 && !editing) {
         const rule = level === 1 ? "━" : "─";
         editor.addVirtualLine(buf, lineStart, "   " + rule.repeat(500), { fg: level === 1 ? "ui.tab_active_bg" : "editor.line_number_fg", clip: true }, false, NS_OUT, -3);
       }
@@ -1224,8 +1225,10 @@ async function decorate(nb: Notebook): Promise<void> {
     }
     // a code cell's source on its own ground, the full width, like a notebook's cell box (the
     // rule above it and the outputs below stay on the editor's)
+    // (a markdown cell's source too, while it's being edited)
     const bodyStart = s.markerEnd > s.start ? s.markerEnd + 1 : s.start;
-    if (s.cell.kind === "code" && s.lastEnd > bodyStart) {
+    const boxed = s.cell.kind === "code" || (s.cell.kind === "markdown" && nb.cursorCell === s.cell.id);
+    if (boxed && s.lastEnd > bodyStart) {
       editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
       // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
@@ -1251,7 +1254,7 @@ async function decorate(nb: Notebook): Promise<void> {
             editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg }, false, NS_OUT, 100 + row);
         }
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
-      } else renderMarkdown(nb, buf, s, lineAt);
+      } else renderMarkdown(nb, buf, s, lineAt, nb.cursorCell === s.cell.id);
     }
     if (s.cell.kind === "code") {
       for (const p of s.lineStarts) {

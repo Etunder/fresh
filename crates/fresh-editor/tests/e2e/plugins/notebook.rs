@@ -1057,9 +1057,20 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
 
     let mut h = harness(&project, &fake_nb);
     h.open_file(&nb_path).unwrap();
-    // the cursor starts in the markdown cell: its source
-    h.wait_until(|h| h.screen_to_string().contains("# Some words here."))
-        .unwrap();
+    // the cursor starts in the markdown cell: its source, in a cell box like a code cell's (a
+    // band of half blocks above it, two columns of the cell's ground before each line)
+    h.wait_until(|h| {
+        let screen = h.screen_to_string();
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = |text: &str| lines.iter().position(|l| l.contains(text));
+        match (at("# # Typeset"), at("# Some words here.")) {
+            (Some(title), Some(words)) => {
+                title > 0 && lines[title - 1].starts_with('▄') && lines[words + 1].starts_with('▀')
+            }
+            _ => false,
+        }
+    })
+    .unwrap();
     // in the code cell, the markdown one is typeset: three image rows under its rule, no source
     h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
     h.wait_until(|h| {
