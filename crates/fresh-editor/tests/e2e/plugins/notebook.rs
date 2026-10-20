@@ -158,8 +158,11 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     })
     .unwrap();
     // the mode badge and the kernel's state dot, herdr's way
-    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK   ● Python 3 idle"))
-        .unwrap();
+    h.wait_until(|h| {
+        h.get_status_bar()
+            .starts_with(" NOTEBOOK   ● Python 3 idle")
+    })
+    .unwrap();
 
     // saving the working copy sends the cells, with their ids, to nb
     h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
