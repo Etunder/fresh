@@ -803,6 +803,31 @@ function sendImage(b64: string, w: number, h: number, density = 1): Image | null
   return { id, cols, rows };
 }
 
+/** Outputs whose image nb is converting to PNG (or couldn't). */
+const converting = new Map<Output, "pending" | "failed">();
+
+/** An output's JPEG, GIF or SVG image, once nb has made a PNG of it (the notebook is redrawn then);
+ *  null until then, or for good if it can't. */
+function convertedImage(nb: Notebook, o: Output, mime: string, data: string): Image | null {
+  const known = images.get(o);
+  if (known) return known;
+  if (!["image/jpeg", "image/gif", "image/svg+xml"].includes(mime) || converting.has(o)) return null;
+  converting.set(o, "pending");
+  void ask(nb, "topng", { mime, data }).then((r) => {
+    const img = r.ok && typeof r.png === "string"
+      ? sendImage(r.png, Number(r.width), Number(r.height), mime === "image/svg+xml" ? 2 : 1)
+      : null;
+    if (!img) {
+      converting.set(o, "failed");
+      return;
+    }
+    converting.delete(o);
+    images.set(o, img);
+    void decorate(nb);
+  });
+  return null;
+}
+
 /** The colour an image's placeholders are drawn in: its id. */
 function imageFg(img: Image): [number, number, number] {
   return [(img.id >> 16) & 0xff, (img.id >> 8) & 0xff, img.id & 0xff];
@@ -946,6 +971,13 @@ function outputLines(nb: Notebook, o: Output): OutLine[] {
       const image = kinds.find((k) => k.startsWith("image/"));
       if (data["image/png"] && IMAGES) {
         const img = uploadImage(o, join(data["image/png"]).replace(/\s+/g, ""));
+        if (img) {
+          const fg = imageFg(img);
+          return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));
+        }
+      } else if (image && IMAGES) {
+        // JPEG, GIF, SVG: nb makes a PNG of it once; the placeholder line shows meanwhile
+        const img = convertedImage(nb, o, image, join(data[image]));
         if (img) {
           const fg = imageFg(img);
           return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));

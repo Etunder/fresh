@@ -67,7 +67,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
-                if req["code"].startswith("sym"):
+                if req["code"].startswith("svg"):
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "display_data", "metadata": {},
+                                     "data": {"image/svg+xml": "<svg xmlns='http://www.w3.org/2000/svg'/>", "text/plain": "<Figure>"}}})
+                elif req["code"].startswith("sym"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
                                      "data": {"text/plain": "x**2 + 1", "text/latex": "$\\displaystyle x^{2} + 1$"}}})
@@ -120,6 +124,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     json.dump(req, f)
                 emit({"event": "kernel", "state": "selected", "name": "Other Kernel"})
                 body["name"] = "Other Kernel"
+            elif url.path == "/topng":
+                with open(os.path.join(os.path.dirname(notebook), "topng.json"), "w") as f:
+                    json.dump(req, f)
+                body.update({"png": PNG, "width": 80, "height": 48})
             elif url.path == "/clear":
                 with open(os.path.join(os.path.dirname(notebook), "cleared.json"), "w") as f:
                     json.dump(req, f)
@@ -923,5 +931,41 @@ fn a_latex_result_is_typeset() {
     let req: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(project.join("math.json")).unwrap()).unwrap();
     assert_eq!(req["latex"], "x^{2} + 1");
+    h.assert_no_plugin_errors();
+}
+
+/// An SVG (or JPEG) output goes to nb to become a PNG, then shows as an image like any other.
+#[test]
+fn an_svg_output_is_converted_and_drawn() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("svg.ipynb");
+    fs::write(&nb_path, SYMPY_NOTEBOOK.replace("sym()", "svg()")).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    let placeholder = '\u{10EEEE}';
+    h.wait_until(|h| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+            == 2
+    })
+    .unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("topng.json")).unwrap()).unwrap();
+    assert_eq!(req["mime"], "image/svg+xml");
     h.assert_no_plugin_errors();
 }
