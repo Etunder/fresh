@@ -738,6 +738,21 @@ pub struct UiColors {
     /// File explorer folder names (falls back to syntax.keyword)
     #[serde(default)]
     pub explorer_directory_fg: Option<StyledColorDef>,
+    /// Selected suggestion text (falls back to popup_selection_fg)
+    #[serde(default)]
+    pub suggestion_selected_fg: Option<StyledColorDef>,
+    /// Selected suggestion keybinding (falls back to help_key_fg)
+    #[serde(default)]
+    pub suggestion_selected_key_fg: Option<StyledColorDef>,
+    /// Selected suggestion source label (falls back to editor.line_number_fg)
+    #[serde(default)]
+    pub suggestion_selected_source_fg: Option<StyledColorDef>,
+    /// Quick-open mode hints text (falls back to editor.line_number_fg)
+    #[serde(default)]
+    pub quick_open_hints_fg: Option<StyledColorDef>,
+    /// Quick-open mode hints background (falls back to suggestion_selected_bg)
+    #[serde(default)]
+    pub quick_open_hints_bg: Option<StyledColorDef>,
     /// Status bar separator glyph text color (falls back to status_bar_fg)
     #[serde(default)]
     pub status_separator_fg: Option<StyledColorDef>,
@@ -1165,6 +1180,11 @@ pub struct Theme {
     pub explorer_border_fg: Color,
     pub explorer_toggle_fg: Color,
     pub explorer_directory_fg: Color,
+    pub suggestion_selected_fg: Color,
+    pub suggestion_selected_key_fg: Color,
+    pub suggestion_selected_source_fg: Color,
+    pub quick_open_hints_fg: Color,
+    pub quick_open_hints_bg: Color,
     /// Status bar palette shortcut hint colors (default: same as status bar)
     pub status_palette_fg: Color,
     pub status_palette_bg: Color,
@@ -1435,6 +1455,11 @@ impl From<ThemeFile> for Theme {
             explorer_border_fg: styled_color(&file.ui.explorer_border_fg),
             explorer_toggle_fg: styled_color(&file.ui.explorer_toggle_fg),
             explorer_directory_fg: styled_color(&file.ui.explorer_directory_fg),
+            suggestion_selected_fg: styled_color(&file.ui.suggestion_selected_fg),
+            suggestion_selected_key_fg: styled_color(&file.ui.suggestion_selected_key_fg),
+            suggestion_selected_source_fg: styled_color(&file.ui.suggestion_selected_source_fg),
+            quick_open_hints_fg: styled_color(&file.ui.quick_open_hints_fg),
+            quick_open_hints_bg: styled_color(&file.ui.quick_open_hints_bg),
             status_palette_fg: styled_color(&file.ui.status_palette_fg),
             status_palette_bg: styled_color(&file.ui.status_palette_bg),
             status_separator_fg: styled_color(&file.ui.status_separator_fg),
@@ -1621,6 +1646,11 @@ impl From<Theme> for ThemeFile {
                 explorer_border_fg: styled(&theme, "ui.explorer_border_fg"),
                 explorer_toggle_fg: styled(&theme, "ui.explorer_toggle_fg"),
                 explorer_directory_fg: styled(&theme, "ui.explorer_directory_fg"),
+                suggestion_selected_fg: styled(&theme, "ui.suggestion_selected_fg"),
+                suggestion_selected_key_fg: styled(&theme, "ui.suggestion_selected_key_fg"),
+                suggestion_selected_source_fg: styled(&theme, "ui.suggestion_selected_source_fg"),
+                quick_open_hints_fg: styled(&theme, "ui.quick_open_hints_fg"),
+                quick_open_hints_bg: styled(&theme, "ui.quick_open_hints_bg"),
                 status_palette_fg: styled(&theme, "ui.status_palette_fg"),
                 status_palette_bg: styled(&theme, "ui.status_palette_bg"),
                 status_separator_fg: styled(&theme, "ui.status_separator_fg"),
@@ -2400,6 +2430,8 @@ theme_color_keys! {
         "prompt_fg" => color prompt_fg,
         "prompt_selection_bg" => color prompt_selection_bg,
         "prompt_selection_fg" => color prompt_selection_fg,
+        "quick_open_hints_bg" => color quick_open_hints_bg fallback "ui.suggestion_selected_bg",
+        "quick_open_hints_fg" => color quick_open_hints_fg fallback "editor.line_number_fg",
         "scrollbar_thumb_fg" => color scrollbar_thumb_fg fallback "editor.line_number_fg",
         "scrollbar_thumb_hover_fg" => color scrollbar_thumb_hover_fg fallback "ui.scrollbar_thumb_fg",
         "scrollbar_track_fg" => color scrollbar_track_fg fallback "editor.current_line_bg",
@@ -2430,6 +2462,9 @@ theme_color_keys! {
         "suggestion_bg" => color suggestion_bg,
         "suggestion_fg" => color suggestion_fg fallback "ui.popup_text_fg",
         "suggestion_selected_bg" => color suggestion_selected_bg,
+        "suggestion_selected_fg" => color suggestion_selected_fg fallback "ui.popup_selection_fg",
+        "suggestion_selected_key_fg" => color suggestion_selected_key_fg fallback "ui.help_key_fg",
+        "suggestion_selected_source_fg" => color suggestion_selected_source_fg fallback "editor.line_number_fg",
         "tab_active_bg" => color tab_active_bg,
         "tab_active_fg" => color tab_active_fg,
         "tab_close_hover_fg" => color tab_close_hover_fg fallback "diagnostic.error_fg",

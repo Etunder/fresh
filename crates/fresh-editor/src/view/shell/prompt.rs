@@ -374,7 +374,7 @@ fn theme(disabled: bool, st: RowState) -> String {
         return attrs("editor.line_number_fg", bg, &["dim"]);
     }
     match st {
-        RowState::Selected | RowState::SelectedBlur => pair("ui.popup_selection_fg", bg),
+        RowState::Selected | RowState::SelectedBlur => pair("ui.suggestion_selected_fg", bg),
         RowState::Hover => pair("ui.menu_hover_fg", bg),
         RowState::Normal => pair("ui.popup_text_fg", bg),
     }
@@ -397,7 +397,11 @@ fn source_theme(disabled: bool, st: RowState) -> String {
     if disabled {
         return theme(disabled, st);
     }
-    attrs("editor.line_number_fg", row_bg(disabled, st), &["dim"])
+    let fg = match st {
+        RowState::Selected | RowState::SelectedBlur => "ui.suggestion_selected_source_fg",
+        _ => "editor.line_number_fg",
+    };
+    attrs(fg, row_bg(disabled, st), &["dim"])
 }
 
 /// The keybinding reads as a shortcut on a row the eye is on, and recedes to
@@ -405,7 +409,8 @@ fn source_theme(disabled: bool, st: RowState) -> String {
 fn keybinding_theme(disabled: bool, st: RowState) -> String {
     let fg = match st {
         RowState::Normal => "editor.line_number_fg",
-        _ => "ui.help_key_fg",
+        RowState::Selected | RowState::SelectedBlur => "ui.suggestion_selected_key_fg",
+        RowState::Hover => "ui.help_key_fg",
     };
     column(disabled, st, fg)
 }
@@ -849,11 +854,7 @@ pub fn suggestions_layer(s: &Suggestions) -> Node<UiMsg> {
 /// and the margin is the same fixed cell the rows use, so what is left is the
 /// text and its name.
 fn hints_row(text_of: &str) -> Node<UiMsg> {
-    let t = attrs(
-        "editor.line_number_fg",
-        "ui.suggestion_selected_bg",
-        &["dim"],
-    );
+    let t = attrs("ui.quick_open_hints_fg", "ui.quick_open_hints_bg", &["dim"]);
     row().h(Sizing::Cells(1)).theme(t.clone()).children([
         row().w(Sizing::Cells(LEFT_MARGIN)),
         text(text_of).theme(t).elide(Elide::Tail),

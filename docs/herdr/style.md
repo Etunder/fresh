@@ -66,7 +66,9 @@ close mark on hover, the status bar's ` · ` separators and accent key hint, the
 (`EDIT`, `TERMINAL`, `EXPLORER`, `PROMPT`, `NOTEBOOK`, …) at the left of the status bar, the hidden
 menu bar, quiet scrollbars, and the explorer as herdr's sidebar (accent border and title when
 focused, `▸ ▾` toggles in accent, folder names in plain text, through the `ui.explorer_*` theme
-keys), with no italics on the preview tab.
+keys), with no italics on the preview tab; the command palette's selected row as panel text on the
+accent across all its columns (`ui.suggestion_selected_*`), and its mode hints on a surface0 strip
+(`ui.quick_open_hints_*`).
 
 ## Feel (decided with the team)
 
