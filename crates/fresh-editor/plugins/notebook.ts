@@ -47,6 +47,7 @@ const NS_OUT = "notebook-out";
 const NS_RULE = "notebook-rule";
 const NS_CELL = "notebook-cell";
 const NS_PAD = "notebook-pad:";
+const NS_MD = "notebook-md";
 
 type Cell = { id: string; kind: string; source: string };
 type Output = Record<string, unknown>;
@@ -360,6 +361,189 @@ function showKernel(nb: Notebook): void {
   if (nb.bufferId !== null) editor.setStatusBarValue(nb.bufferId, "kernel", kernelBadge(nb));
 }
 
+// ── markdown cells: LaTeX as Unicode, inline marks ──────────────────
+
+const LATEX_SYMBOLS: Record<string, string> = {
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ϵ", varepsilon: "ε", zeta: "ζ", eta: "η",
+  theta: "θ", vartheta: "ϑ", iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π",
+  varpi: "ϖ", rho: "ρ", varrho: "ϱ", sigma: "σ", varsigma: "ς", tau: "τ", upsilon: "υ", phi: "ϕ",
+  varphi: "φ", chi: "χ", psi: "ψ", omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ",
+  Xi: "Ξ", Pi: "Π", Sigma: "Σ", Upsilon: "Υ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+  sum: "∑", prod: "∏", coprod: "∐", int: "∫", iint: "∬", oint: "∮", partial: "∂", nabla: "∇",
+  infty: "∞", pm: "±", mp: "∓", times: "×", div: "÷", cdot: "·", cdots: "⋯", ldots: "…", dots: "…",
+  vdots: "⋮", ddots: "⋱", le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠", ll: "≪", gg: "≫",
+  approx: "≈", equiv: "≡", sim: "∼", simeq: "≃", cong: "≅", propto: "∝", in: "∈", notin: "∉",
+  ni: "∋", subset: "⊂", subseteq: "⊆", supset: "⊃", supseteq: "⊇", cup: "∪", cap: "∩",
+  setminus: "∖", emptyset: "∅", varnothing: "∅", forall: "∀", exists: "∃", neg: "¬", lnot: "¬",
+  land: "∧", wedge: "∧", lor: "∨", vee: "∨", oplus: "⊕", otimes: "⊗", to: "→", rightarrow: "→",
+  leftarrow: "←", gets: "←", Rightarrow: "⇒", Leftarrow: "⇐", implies: "⇒", iff: "⇔",
+  leftrightarrow: "↔", Leftrightarrow: "⇔", mapsto: "↦", uparrow: "↑", downarrow: "↓",
+  langle: "⟨", rangle: "⟩", lfloor: "⌊", rfloor: "⌋", lceil: "⌈", rceil: "⌉", circ: "∘",
+  bullet: "•", star: "⋆", ast: "∗", ell: "ℓ", hbar: "ℏ", Re: "ℜ", Im: "ℑ", aleph: "ℵ", top: "⊤",
+  bot: "⊥", perp: "⊥", parallel: "∥", angle: "∠", triangle: "△", square: "□", prime: "′",
+  degree: "°", checkmark: "✓", quad: "  ", qquad: "    ", ",": " ", ";": " ", ":": " ", "!": "",
+  " ": " ", "{": "{", "}": "}", "%": "%", "$": "$", "#": "#", "&": "&", "_": "_", "|": "‖",
+  lbrace: "{", rbrace: "}", vert: "|", Vert: "‖", backslash: "\\",
+};
+const LATEX_FUNCTIONS = new Set(["sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos",
+  "arctan", "sinh", "cosh", "tanh", "log", "ln", "lg", "exp", "max", "min", "sup", "inf", "lim",
+  "limsup", "liminf", "det", "dim", "ker", "deg", "gcd", "arg", "Pr", "mod", "bmod"]);
+const LATEX_ACCENTS: Record<string, string> = { hat: "̂", widehat: "̂", bar: "̄",
+  overline: "̅", vec: "⃗", dot: "̇", ddot: "̈", tilde: "̃",
+  widetilde: "̃", acute: "́", grave: "̀", underline: "̲" };
+const BLACKBOARD: Record<string, string> = { N: "ℕ", Z: "ℤ", Q: "ℚ", R: "ℝ", C: "ℂ", P: "ℙ", E: "𝔼", H: "ℍ" };
+const SUP = "0⁰1¹2²3³4⁴5⁵6⁶7⁷8⁸9⁹+⁺-⁻=⁼(⁽)⁾nⁿiⁱaᵃbᵇcᶜdᵈeᵉfᶠgᵍhʰjʲkᵏlˡmᵐoᵒpᵖrʳsˢtᵗuᵘvᵛwʷxˣyʸzᶻTᵀAᴬBᴮDᴰEᴱGᴳHᴴIᴵJᴶKᴷLᴸMᴹNᴺOᴼPᴾRᴿUᵁVⱽWᵂ′′*˟";
+const SUB = "0₀1₁2₂3₃4₄5₅6₆7₇8₈9₉+₊-₋=₌(₍)₎aₐeₑhₕiᵢjⱼkₖlₗmₘnₙoₒpₚrᵣsₛtₜuᵤvᵥxₓβᵦγᵧρᵨφᵩχᵪ";
+const pairs = (t: string) => {
+  const m = new Map<string, string>();
+  const cs = [...t];
+  for (let i = 0; i + 1 < cs.length; i += 2) m.set(cs[i], cs[i + 1]);
+  return m;
+};
+const SUP_MAP = pairs(SUP);
+const SUB_MAP = pairs(SUB);
+
+/** LaTeX math as plain Unicode, for a terminal: `\alpha^2 + \sum_{i=1}^n x_i` → `α² + ∑ᵢ₌₁ⁿ xᵢ`.
+ *  Covers what notebooks write in prose (Greek, operators, relations, arrows, scripts, \frac,
+ *  \sqrt, accents, \mathbb, \text); anything it doesn't know is kept as written, minus braces. */
+export function latexToUnicode(src: string): string {
+  let i = 0;
+  const s = src;
+  const skipSpaces = () => {
+    while (i < s.length && s[i] === " ") i++;
+  };
+  // one argument: a {group}, a \command or a single character
+  const arg = (): string => {
+    skipSpaces();
+    if (i >= s.length) return "";
+    if (s[i] === "{") {
+      let depth = 0;
+      const start = i;
+      for (; i < s.length; i++) {
+        if (s[i] === "\\") {
+          i++;
+          continue;
+        }
+        if (s[i] === "{") depth++;
+        else if (s[i] === "}" && --depth === 0) break;
+      }
+      const inner = s.slice(start + 1, i);
+      i++;
+      return latexToUnicode(inner);
+    }
+    if (s[i] === "\\") return command();
+    return s[i++];
+  };
+  const script = (text: string, map: Map<string, string>, mark: string): string => {
+    const cs = [...text];
+    if (cs.length && cs.every((c) => map.has(c))) return cs.map((c) => map.get(c)).join("");
+    return cs.length === 1 ? mark + text : `${mark}(${text})`;
+  };
+  const wrap = (t: string) => ([...t].length > 1 && !/^[\p{L}\p{N}.]+$/u.test(t) ? `(${t})` : t);
+  const command = (): string => {
+    i++; // the backslash
+    const m = /^([A-Za-z]+|.)/.exec(s.slice(i));
+    if (!m) return "\\";
+    const name = m[1];
+    i += name.length;
+    if (name === "frac" || name === "dfrac" || name === "tfrac") {
+      const a = arg();
+      const b = arg();
+      return `${wrap(a)}/${wrap(b)}`;
+    }
+    if (name === "sqrt") {
+      let n = "";
+      skipSpaces();
+      if (s[i] === "[") {
+        const close = s.indexOf("]", i);
+        n = latexToUnicode(s.slice(i + 1, close));
+        i = close + 1;
+      }
+      const x = arg();
+      const root = n === "3" ? "∛" : n === "4" ? "∜" : n ? script(n, SUP_MAP, "^") + "√" : "√";
+      return root + wrap(x);
+    }
+    if (name in LATEX_ACCENTS) {
+      const x = arg();
+      return [...x].length === 1 ? x + LATEX_ACCENTS[name] : x;
+    }
+    if (name === "mathbb") {
+      const x = arg();
+      return [...x].map((c) => BLACKBOARD[c] ?? c).join("");
+    }
+    if (["text", "textrm", "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "mathcal", "operatorname",
+      "boldsymbol", "textbf", "textit", "emph"].includes(name)) return arg();
+    if (name === "left" || name === "right" || name === "big" || name === "Big" || name === "bigg"
+      || name === "Bigg" || name === "displaystyle" || name === "limits" || name === "nolimits") {
+      if ((name === "left" || name === "right") && s[i] === ".") i++;
+      return "";
+    }
+    if (name === "begin" || name === "end") {
+      arg(); // the environment's name
+      return "";
+    }
+    if (name === "\\") return "  ";
+    if (LATEX_FUNCTIONS.has(name)) return name;
+    if (name in LATEX_SYMBOLS) return LATEX_SYMBOLS[name];
+    return name;
+  };
+  let out = "";
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "\\") out += command();
+    else if (c === "^") {
+      i++;
+      out += script(arg(), SUP_MAP, "^");
+    } else if (c === "_") {
+      i++;
+      out += script(arg(), SUB_MAP, "_");
+    } else if (c === "{" || c === "}") i++;
+    else if (c === "&") {
+      out += " ";
+      i++;
+    } else if (c === "~") {
+      out += " ";
+      i++;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out.replace(/ {3,}/g, "  ");
+}
+
+/** An inline mark in a markdown line, by character offsets: the whole of it, the text it shows,
+ *  and how. `math` shows `text` in place of the whole; the others hide the marks around `inner`. */
+export type MdMark = {
+  kind: "code" | "bold" | "italic" | "link" | "math";
+  start: number;
+  end: number;
+  innerStart: number;
+  innerEnd: number;
+  text: string;
+};
+
+/** The inline marks of one markdown line, left to right, not overlapping. */
+export function markdownMarks(line: string): MdMark[] {
+  const re = /`([^`]+)`|\$\$(.+?)\$\$|\$([^$\s](?:[^$]*[^$\s])?)\$|\*\*(.+?)\*\*|__(.+?)__|\*([^*\s](?:[^*]*[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_]*[^_\s])?)_(?![\w])|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  const marks: MdMark[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    const at = (inner: string, open: number) => ({ innerStart: start + open, innerEnd: start + open + inner.length });
+    if (m[1] !== undefined) marks.push({ kind: "code", start, end, ...at(m[1], 1), text: m[1] });
+    else if (m[2] !== undefined) marks.push({ kind: "math", start, end, ...at(m[2], 2), text: latexToUnicode(m[2]) });
+    else if (m[3] !== undefined) marks.push({ kind: "math", start, end, ...at(m[3], 1), text: latexToUnicode(m[3]) });
+    else if (m[4] !== undefined) marks.push({ kind: "bold", start, end, ...at(m[4], 2), text: m[4] });
+    else if (m[5] !== undefined) marks.push({ kind: "bold", start, end, ...at(m[5], 2), text: m[5] });
+    else if (m[6] !== undefined) marks.push({ kind: "italic", start, end, ...at(m[6], 1), text: m[6] });
+    else if (m[7] !== undefined) marks.push({ kind: "italic", start, end, ...at(m[7], 1), text: m[7] });
+    else if (m[8] !== undefined) marks.push({ kind: "link", start, end, ...at(m[8], 1), text: m[8] });
+  }
+  return marks;
+}
+
 // ── images (kitty graphics, Unicode placeholders) ────────────────────
 
 /** The row/column diacritics of kitty's placeholder scheme (rowcolumn-diacritics.txt). */
@@ -516,6 +700,86 @@ function outputLines(o: Output): OutLine[] {
   return [];
 }
 
+/** A markdown cell as rendered text while the cursor is elsewhere (the `# ` prefixes, `#` heading
+ *  marks, `**`, backticks and link targets hidden, math as Unicode), its source while editing it:
+ *  every conceal is "unless the cursor is in this cell". The styles stay on in both. */
+function renderMarkdown(buf: number, s: Span, lineAt: Map<number, string>): void {
+  const scope: [number, number] = [s.start, s.end + 1];
+  const conceal = (start: number, end: number, with_: string) =>
+    editor.addConceal(buf, NS_MD, start, end, with_, "unless-cursor-in", scope[0], scope[1]);
+  const style = (start: number, end: number, o: Record<string, unknown>) => {
+    if (end > start) editor.addOverlay(buf, NS_MD, start, end, o);
+  };
+  let display = false; // inside a $$ … $$ block spread over lines
+  for (const lineStart of s.lineStarts) {
+    const raw = lineAt.get(lineStart) ?? "";
+    const prefix = /^# ?/.exec(raw)?.[0].length ?? 0;
+    const content = raw.slice(prefix);
+    const b = (chars: number) => lineStart + bytes(raw.slice(0, prefix + chars));
+    const lineEnd = b(content.length);
+    // the comment prefix becomes the margin the code cells have, so text lines up with code
+    conceal(lineStart, b(0), "   ");
+    // prose in the text colour (it's a Python comment underneath)
+    style(b(0), lineEnd, { fg: "editor.fg" });
+    if (content.trim() === "$$") {
+      display = !display;
+      conceal(b(0), lineEnd, "");
+      continue;
+    }
+    const block = /^\s*\$\$(.+)\$\$\s*$/.exec(content);
+    if (display || block) {
+      conceal(b(0), lineEnd, "    " + latexToUnicode(block ? block[1] : content));
+      style(b(0), lineEnd, { fg: "syntax.number" });
+      continue;
+    }
+    const heading = /^(#{1,6})\s+/.exec(content);
+    if (heading) {
+      const level = heading[1].length;
+      conceal(b(0), b(heading[0].length), "");
+      style(b(heading[0].length), lineEnd, level <= 2 ? { fg: "ui.tab_active_bg", bold: true } : { fg: "editor.fg", bold: true });
+      if (level <= 2) {
+        const rule = level === 1 ? "━" : "─";
+        editor.addVirtualLine(buf, lineStart, "   " + rule.repeat(500), { fg: level === 1 ? "ui.tab_active_bg" : "editor.line_number_fg", clip: true }, false, NS_OUT, -3);
+      }
+      continue;
+    }
+    if (/^\s*(\*{3,}|-{3,}|_{3,})\s*$/.test(content)) {
+      conceal(b(0), lineEnd, "─".repeat(48));
+      style(b(0), lineEnd, { fg: "editor.line_number_fg" });
+      continue;
+    }
+    let from = 0;
+    const quote = /^>\s?/.exec(content);
+    if (quote) {
+      conceal(b(0), b(quote[0].length), "▌ ");
+      style(b(0), lineEnd, { fg: "editor.line_number_fg" });
+      from = quote[0].length;
+    }
+    const bullet = /^(\s*)([-*+])\s/.exec(content.slice(from));
+    if (bullet) {
+      const at = from + bullet[1].length;
+      conceal(b(at), b(at + 1), "•");
+      style(b(at), b(at + 1), { fg: "ui.tab_active_bg" });
+    }
+    for (const m of markdownMarks(content)) {
+      if (bullet && m.start <= from + bullet[1].length) continue; // the bullet's own *
+      if (m.kind === "math") {
+        conceal(b(m.start), b(m.end), m.text);
+        style(b(m.start), b(m.end), { fg: "syntax.number" });
+        continue;
+      }
+      conceal(b(m.start), b(m.innerStart), "");
+      conceal(b(m.innerEnd), b(m.end), "");
+      const look: Record<string, unknown> =
+        m.kind === "code" ? { fg: "syntax.string", bg: "ui.notebook_cell_bg" }
+        : m.kind === "bold" ? { fg: "editor.fg", bold: true }
+        : m.kind === "italic" ? { fg: "editor.fg", italic: true }
+        : { fg: "ui.tab_active_bg", underline: true };
+      style(b(m.innerStart), b(m.innerEnd), look);
+    }
+  }
+}
+
 async function decorate(nb: Notebook): Promise<void> {
   const buf = nb.bufferId;
   if (buf === null) return;
@@ -525,6 +789,15 @@ async function decorate(nb: Notebook): Promise<void> {
   editor.clearConcealNamespace(buf, NS_RULE);
   editor.clearNamespace(buf, NS_CELL);
   editor.removeVirtualTextsByPrefix(buf, NS_PAD);
+  editor.clearConcealNamespace(buf, NS_MD);
+  editor.clearNamespace(buf, NS_MD);
+  // each line's text by its start (bytes), for the markdown cells
+  const lineAt = new Map<number, string>();
+  let at = 0;
+  for (const line of text.split("\n")) {
+    lineAt.set(at, line);
+    at += bytes(line) + 1;
+  }
   spans.forEach((s, i) => {
     const r = nb.runs.get(s.cell.id);
     // the `# %%` line as a quiet rule: cell number, kind, run count and state (herdr's muted
@@ -551,6 +824,7 @@ async function decorate(nb: Notebook): Promise<void> {
       s.lineStarts.forEach((p, k) =>
         editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, p, "  ", { bg: "ui.notebook_cell_bg" }, true));
     }
+    if (s.cell.kind === "markdown") renderMarkdown(buf, s, lineAt);
     if (!r || s.cell.kind !== "code") return;
     // long text output is cut; image rows are never (half a plot helps nobody)
     let shown = 0;

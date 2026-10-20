@@ -153,6 +153,7 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         !screen.contains("nbformat"),
         "the JSON view is gone:\n{screen}"
     );
+    // the cursor starts in the markdown cell: its source, `# `-commented in the working copy
     assert!(
         screen.contains("# # Report"),
         "markdown cells are commented:\n{screen}"
@@ -166,6 +167,12 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         s.contains("ran: print('hello')") && s.contains("── 2 [1] ✓")
     })
     .unwrap();
+    // with the cursor out of it, the markdown cell is rendered: no `# ` prefix, no heading mark
+    let screen = h.screen_to_string();
+    assert!(
+        !screen.contains("# # Report") && screen.contains("   Report"),
+        "a markdown cell renders when the cursor leaves it:\n{screen}"
+    );
     // the mode badge and the kernel's state dot, herdr's way
     h.wait_until(|h| {
         h.get_status_bar()
