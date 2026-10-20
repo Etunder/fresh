@@ -5054,6 +5054,8 @@ impl JsEditorApi {
     /// rendering — the line containing `start - 1` (the fold "header")
     /// stays visible, while subsequent lines covered by the range are
     /// skipped.
+    /// The header shows `placeholder` after its text (`...` without one;
+    /// an empty string shows nothing).
     pub fn add_fold(
         &self,
         buffer_id: u32,

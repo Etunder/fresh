@@ -246,10 +246,11 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         !screen.contains("nbformat"),
         "the JSON view is gone:\n{screen}"
     );
-    // the cursor starts in the markdown cell: its source, `# `-commented in the working copy
+    // the cursor starts in the markdown cell: its source as it is (a raw string in the working
+    // copy, its quotes hidden)
     assert!(
-        screen.contains("# # Report"),
-        "markdown cells are commented:\n{screen}"
+        screen.contains("# Report") && !screen.contains("# # Report") && !screen.contains("\"\"\""),
+        "markdown cells are shown as written:\n{screen}"
     );
 
     // Alt+Enter on the markdown cell moves on; on the code cell it runs it
@@ -264,7 +265,7 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     // with the cursor out of it, the markdown cell is rendered: no `# ` prefix, no heading mark
     let screen = h.screen_to_string();
     assert!(
-        !screen.contains("# # Report") && screen.contains("   Report"),
+        !screen.contains("# Report") && screen.contains("   Report"),
         "a markdown cell renders when the cursor leaves it:\n{screen}"
     );
     // the mode badge and the kernel's state dot, herdr's way
@@ -1063,7 +1064,7 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
         let screen = h.screen_to_string();
         let lines: Vec<&str> = screen.lines().collect();
         let at = |text: &str| lines.iter().position(|l| l.contains(text));
-        match (at("# # Typeset"), at("# Some words here.")) {
+        match (at("# Typeset"), at("Some words here.")) {
             (Some(title), Some(words)) => {
                 title > 0 && lines[title - 1].starts_with('▄') && lines[words + 1].starts_with('▀')
             }
@@ -1093,7 +1094,7 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
         .unwrap() as u16
         + 1;
     h.mouse_click(20, row).unwrap();
-    h.wait_until(|h| h.screen_to_string().contains("# Some words here."))
+    h.wait_until(|h| h.screen_to_string().contains("Some words here."))
         .unwrap();
     // (the cell opens at the click; the cursor lands on the text once nb has said where)
     h.wait_until(|h| {
@@ -1103,7 +1104,91 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
     })
     .unwrap();
     h.type_text("X").unwrap();
-    h.wait_until(|h| h.screen_to_string().contains("# Some Xwords here."))
+    h.wait_until(|h| h.screen_to_string().contains("Some Xwords here."))
         .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+/// A markdown cell is its text as written, no `# ` before each line: a raw string in the working
+/// copy, whose quotes stay out of sight and out of the cursor's way, and go back where they belong
+/// when an edit at the text's ends takes them along.
+#[test]
+fn a_markdown_cell_is_edited_as_plain_text() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    fs::write(&nb_path, NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("── 2 [ ]"))
+        .unwrap();
+    let text = |h: &EditorTestHarness| h.get_buffer_content().unwrap_or_default();
+    assert!(
+        text(&h).starts_with("# %% [markdown] id=intro\nr\"\"\"\n# Report\"\"\"\n"),
+        "{}",
+        text(&h)
+    );
+    let screen = h.screen_to_string();
+    assert!(
+        !screen.contains("\"\"\"") && !screen.contains("# # Report"),
+        "{screen}"
+    );
+    let at = |h: &EditorTestHarness, s: &str| text(h).find(s).unwrap();
+
+    // down from the `# %%` line: past the hidden `r"""` line, onto the text
+    h.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.cursor_position() == at(h, "# Report"))
+        .unwrap();
+    // End stops before the closing quotes; what's typed goes in the text
+    h.send_key(KeyCode::End, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.cursor_position() == at(h, "\"\"\"\n\n"))
+        .unwrap();
+    h.type_text("!").unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    h.type_text("more").unwrap();
+    h.wait_until(|h| text(h).contains("\nr\"\"\"\n# Report!\nmore\"\"\"\n"))
+        .unwrap();
+
+    // a Delete at the end takes a closing quote: it comes back, the cursor where it was
+    h.send_key(KeyCode::Delete, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| {
+        text(h).contains("\nmore\"\"\"\n") && h.cursor_position() == at(h, "\"\"\"\n\n")
+    })
+    .unwrap();
+
+    // a Backspace at the start of the text joins the `r"""` line to it: it goes back on its own
+    h.send_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.cursor_position() == at(h, "# Report!"))
+        .unwrap();
+    h.send_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| {
+        text(h).contains("id=intro\nr\"\"\"\n# Report!\n")
+            && h.cursor_position() == at(h, "# Report!")
+    })
+    .unwrap();
+    h.type_text(">").unwrap();
+    h.wait_until(|h| text(h).contains("\nr\"\"\"\n># Report!\nmore\"\"\"\n"))
+        .unwrap();
+
+    // and the notebook gets the text as typed
+    h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
+        .unwrap();
+    let saved = project.join("saved.json");
+    h.wait_until(|_| saved.exists()).unwrap();
+    let cells: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&saved).unwrap()).unwrap();
+    assert_eq!(cells[0]["source"], "># Report!\nmore");
     h.assert_no_plugin_errors();
 }

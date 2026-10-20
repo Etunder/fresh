@@ -93,6 +93,8 @@ type Notebook = {
   /** The markdown cell the cursor was in at the last redraw (its source shows, the others are
    *  typeset), and the typeset ones by the line of their `# %%` marker, for clicks. */
   cursorCell?: string | null;
+  /** The text changed since the last redraw (its spans are out of date). */
+  edited?: boolean;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
   spans?: Span[];
 };
@@ -201,6 +203,14 @@ const MAGIC = /^(%|!)/;
 const HIDDEN_MAGIC = /^#!(?=%|!)/;
 const hideMagics = (src: string) => src.split("\n").map((l) => (MAGIC.test(l) ? "#!" + l : l)).join("\n");
 
+/** A markdown (or raw) cell's text is one raw string in the working copy, its lines as they are: a
+ *  bare string is nothing to Python's tools. The `r"""` has a line to itself (hidden), the closing
+ *  `"""` ends the last line (concealed). Text with a `"""` of its own can't be in one: it is a
+ *  comment, a `# ` before each line, the plain percent format. */
+const OPEN_QUOTE = /^[rR]?"""/;
+const CLOSE_QUOTE = /"""$/;
+const quotable = (source: string) => !source.includes('"""');
+
 /** Cells as percent-format text. */
 export function cellsToText(cells: Cell[]): string {
   if (cells.length === 0) return markerLine({ id: newId(), kind: "code", source: "" }) + "\n";
@@ -208,7 +218,9 @@ export function cellsToText(cells: Cell[]): string {
     .map((c) => {
       const body = c.kind === "code"
         ? hideMagics(c.source)
-        : c.source.split("\n").map((l) => (l.length ? "# " + l : "#")).join("\n");
+        : quotable(c.source)
+          ? `r"""\n${c.source}"""`
+          : c.source.split("\n").map((l) => (l.length ? "# " + l : "#")).join("\n");
       return markerLine(c) + "\n" + body + (body.endsWith("\n") || body === "" ? "" : "\n");
     })
     .join("\n");
@@ -224,6 +236,9 @@ type Span = {
   hasId: boolean;
   /** Where each line of the source starts (bytes), up to the last one with text. */
   lineStarts: number[];
+  /** A markdown cell in a raw string: where its `r"""` line and its `"""` line start and end (a
+   *  quote an edit joined to a line of text stays on it, until `fixQuotes` puts it back). */
+  quotes?: { open: number; openEnd: number; close: number; closeEnd: number };
 };
 
 /** The cells of percent-format text, with where each sits (byte offsets). */
@@ -231,12 +246,35 @@ export function textToCells(text: string): Span[] {
   const lines = text.split("\n");
   const spans: Span[] = [];
   let offset = 0;
-  let current: { span: Span; body: string[] } | null = null;
+  let current: { span: Span; body: string[]; ends: number[] } | null = null;
   const finish = () => {
     if (!current) return;
     let body = current.body;
     // the blank line written between cells belongs to no cell
     if (body.length && body[body.length - 1] === "") body = body.slice(0, -1);
+    const n = body.length;
+    if (current.span.cell.kind !== "code" && n && OPEN_QUOTE.test(body[0])) {
+      // a raw string: the text after the `r"""` line (or after the quote, an edit having joined
+      // them), up to the closing quotes (ones an edit took away are put back by `fixQuotes`)
+      const span = current.span;
+      const starts = span.lineStarts.slice(0, n);
+      const ends = current.ends.slice(0, n);
+      const open = OPEN_QUOTE.exec(body[0])![0].length;
+      const lines = body.slice();
+      lines[0] = lines[0].slice(open);
+      starts[0] += open;
+      const tail = /"{1,3}$/.exec(lines[n - 1]);
+      span.quotes = { open: span.lineStarts[0], openEnd: current.ends[0], close: ends[n - 1] - (tail?.[0].length ?? 0), closeEnd: ends[n - 1] };
+      lines[n - 1] = lines[n - 1].slice(0, lines[n - 1].length - (tail?.[0].length ?? 0));
+      if (n > 1 && lines[0] === "") (lines.shift(), starts.shift(), ends.shift());
+      span.cell.source = lines.join("\n");
+      span.lineStarts = starts;
+      span.lastLine = starts[starts.length - 1];
+      span.lastEnd = span.quotes.close;
+      span.end = span.quotes.closeEnd;
+      spans.push(span);
+      return;
+    }
     if (current.span.cell.kind !== "code") body = body.map((l) => l.replace(/^# ?/, ""));
     else body = body.map((l) => l.replace(HIDDEN_MAGIC, ""));
     current.span.cell.source = body.join("\n");
@@ -260,9 +298,11 @@ export function textToCells(text: string): Span[] {
           lineStarts: [],
         },
         body: [],
+        ends: [],
       };
     } else if (current) {
       current.body.push(line);
+      current.ends.push(lineEnd);
       current.span.lineStarts.push(offset);
       // outputs hang under the cell's last line with text (the line at the very end of the file
       // draws no virtual lines)
@@ -276,12 +316,31 @@ export function textToCells(text: string): Span[] {
       current = {
         span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false, lineStarts: [offset] },
         body: [line],
+        ends: [lineEnd],
       };
     }
     offset = lineEnd + 1;
   });
   finish();
   return spans;
+}
+
+/** Where a cell's source starts in the working copy (past its `# %%` line, and its `r"""` line). */
+function sourceStart(s: Span): number {
+  if (s.quotes) return s.lineStarts[0] ?? s.quotes.openEnd;
+  return s.markerEnd > s.start ? Math.min(s.markerEnd + 1, s.end) : s.start;
+}
+
+/** The `# ` a markdown line has in front of it in the working copy (none in a raw string). */
+const mdPrefix = (s: Span, raw: string) => (s.quotes ? "" : /^# ?/.exec(raw)?.[0] ?? "");
+
+/** A markdown cell's line as the working copy has it, without the string's quotes. */
+function mdText(s: Span, lineStart: number, lineAt: Map<number, string>): string {
+  let raw = lineAt.get(lineStart) ?? "";
+  const q = s.quotes;
+  if (!q) return raw;
+  if (lineStart > q.open && lineStart <= q.openEnd) raw = raw.replace(OPEN_QUOTE, ""); // (joined)
+  return lineStart === s.lastLine ? raw.replace(/"{1,3}$/, "") : raw;
 }
 
 // ── talking to nb serve ──────────────────────────────────────────────
@@ -866,8 +925,8 @@ function cellMarkdown(s: Span, lineAt: Map<number, string>): { md: string; lines
   let md = "";
   const lines: MdLine[] = [];
   for (const lineStart of s.lineStarts) {
-    const raw = lineAt.get(lineStart) ?? "";
-    const prefix = /^# ?/.exec(raw)?.[0] ?? "";
+    const raw = mdText(s, lineStart, lineAt);
+    const prefix = mdPrefix(s, raw);
     lines.push({ md: bytes(md), buf: lineStart + bytes(prefix) });
     md += raw.slice(prefix.length) + "\n";
   }
@@ -1073,8 +1132,13 @@ function outputLines(nb: Notebook, o: Output): OutLine[] {
  *  every conceal is "unless the cursor is in this cell". The styles stay on in both. */
 function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>, editing = false): void {
   const scope: [number, number] = [s.start, s.end + 1];
-  const conceal = (start: number, end: number, with_: string) =>
+  // a raw string's lines get the margin the code cells have (in the cell's box, its own): ahead of
+  // what hides a line's first characters, as anything anchored there hides with them; else on its own
+  const margins = new Set(s.quotes && !editing ? s.lineStarts : []);
+  const conceal = (start: number, end: number, with_: string) => {
+    if (margins.delete(start)) with_ = "   " + with_;
     editor.addConceal(buf, NS_MD, start, end, with_, "unless-cursor-in", scope[0], scope[1]);
+  };
   const style = (start: number, end: number, o: Record<string, unknown>) => {
     if (end > start) editor.addOverlay(buf, NS_MD, start, end, o);
   };
@@ -1085,8 +1149,8 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
     const latex = block.latex.join("\n").trim();
     const img = latex ? formulaImage(nb, latex) : null;
     for (const lineStart of block.lines) {
-      const raw = lineAt.get(lineStart) ?? "";
-      const prefix = /^# ?/.exec(raw)?.[0].length ?? 0;
+      const raw = mdText(s, lineStart, lineAt);
+      const prefix = mdPrefix(s, raw).length;
       const content = raw.slice(prefix);
       const from = lineStart + bytes(raw.slice(0, prefix));
       const to = from + bytes(content);
@@ -1103,13 +1167,13 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
     }
   };
   for (const lineStart of s.lineStarts) {
-    const raw = lineAt.get(lineStart) ?? "";
-    const prefix = /^# ?/.exec(raw)?.[0].length ?? 0;
+    const raw = mdText(s, lineStart, lineAt);
+    const prefix = mdPrefix(s, raw).length;
     const content = raw.slice(prefix);
     const b = (chars: number) => lineStart + bytes(raw.slice(0, prefix + chars));
     const lineEnd = b(content.length);
     // the comment prefix becomes the margin the code cells have, so text lines up with code
-    conceal(lineStart, b(0), "   ");
+    if (prefix) conceal(lineStart, b(0), "   ");
     // prose in the text colour (it's a Python comment underneath)
     style(b(0), lineEnd, { fg: "editor.fg" });
     if (display) {
@@ -1177,12 +1241,16 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
     }
   }
   if (display) endDisplay(display); // a block the cell never closes
+  for (const p of margins) editor.addVirtualTextStyled(buf, `${NS_PAD}md:${p}`, p, "   ", {}, true);
 }
 
-async function decorate(nb: Notebook): Promise<void> {
+/** Draws the notebook's cells: rules, boxes, outputs, typeset markdown. `cursor`: where the cursor
+ *  is going, when the plugin just moved it (the editor's answer lags, and no cursor_moved comes). */
+async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   const buf = nb.bufferId;
   if (buf === null) return;
-  const text = await editor.getBufferText(buf);
+  let text = await editor.getBufferText(buf);
+  if (fixQuotes(buf, text)) text = await editor.getBufferText(buf);
   const spans = textToCells(text);
   editor.clearVirtualTextNamespace(buf, NS_OUT);
   editor.clearConcealNamespace(buf, NS_RULE);
@@ -1192,7 +1260,8 @@ async function decorate(nb: Notebook): Promise<void> {
   editor.clearNamespace(buf, NS_MD);
   editor.clearFolds(buf);
   nb.spans = spans;
-  const cursor = editor.getActiveBufferId() === buf ? editor.getCursorPosition() : -1;
+  nb.edited = false;
+  const cursor = cursorAt ?? (editor.getActiveBufferId() === buf ? editor.getCursorPosition() : -1);
   nb.cursorCell = markdownCellAt(spans, cursor);
   const typeset = new Map<number, { cell: string; lines: MdLine[]; rowPx: number }>();
   nb.typeset = typeset;
@@ -1226,9 +1295,9 @@ async function decorate(nb: Notebook): Promise<void> {
     // a code cell's source on its own ground, the full width, like a notebook's cell box (the
     // rule above it and the outputs below stay on the editor's)
     // (a markdown cell's source too, while it's being edited)
-    const bodyStart = s.markerEnd > s.start ? s.markerEnd + 1 : s.start;
+    const bodyStart = sourceStart(s);
     const boxed = s.cell.kind === "code" || (s.cell.kind === "markdown" && nb.cursorCell === s.cell.id);
-    if (boxed && s.lastEnd > bodyStart) {
+    if (boxed && (s.lastEnd > bodyStart || (s.quotes && s.lineStarts.length))) {
       editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
       // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
@@ -1244,9 +1313,10 @@ async function decorate(nb: Notebook): Promise<void> {
       // the `# %%` rule, the page's rows hang under that
       const md = s.markerEnd > s.start && nb.cursorCell !== s.cell.id ? cellMarkdown(s, lineAt) : null;
       const page = md ? cellPage(nb, s, md.md) : null;
-      if (md && page && page.tiles.length && s.lastEnd + 1 <= at) {
+      const last = s.quotes ? s.quotes.closeEnd : s.lastEnd;
+      if (md && page && page.tiles.length && last + 1 <= at) {
         // (a fold always shows a mark after its first line: a pencil, the cell is there to edit)
-        editor.addFold(buf, s.markerEnd + 1, s.lastEnd + 1, "✎");
+        editor.addFold(buf, s.markerEnd + 1, last + 1, "✎");
         let row = 0;
         for (const img of page.tiles) {
           const fg = imageFg(img.id);
@@ -1254,7 +1324,15 @@ async function decorate(nb: Notebook): Promise<void> {
             editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg }, false, NS_OUT, 100 + row);
         }
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
-      } else renderMarkdown(nb, buf, s, lineAt, nb.cursorCell === s.cell.id);
+      } else {
+        renderMarkdown(nb, buf, s, lineAt, nb.cursorCell === s.cell.id);
+        // the raw string's quotes out of sight: its `r"""` line (with nothing after the line above),
+        // the `"""` at the end of the last
+        const q = s.quotes;
+        if (q && q.open > s.markerEnd && q.openEnd + 1 <= at && s.lineStarts[0] > q.openEnd)
+          editor.addFold(buf, q.open, q.openEnd + 1, "");
+        if (q && q.closeEnd > q.close) editor.addConceal(buf, NS_MD, q.close, q.closeEnd, "");
+      }
     }
     if (s.cell.kind === "code") {
       for (const p of s.lineStarts) {
@@ -1289,6 +1367,33 @@ async function decorate(nb: Notebook): Promise<void> {
   dropStalePages();
 }
 
+/** Puts a markdown cell's quotes back the way they go after an edit took them out of place: a
+ *  Backspace at the start of its text joins the hidden `r"""` line to it, a Delete at its end takes
+ *  away a closing quote. Says whether it changed anything. */
+function fixQuotes(buf: number, text: string): boolean {
+  // what goes where, and whether the cursor there stays before it (on the text)
+  const edits: { at: number; insert: string; before: boolean }[] = [];
+  for (const s of textToCells(text)) {
+    const q = s.quotes;
+    if (!q) continue;
+    // `r"""text`: the text starts on the quote's line
+    const first = s.lineStarts[0];
+    if (first !== undefined && first > q.open && first <= q.openEnd) edits.push({ at: first, insert: "\n", before: false });
+    const quotes = q.closeEnd - q.close;
+    if (quotes < 3) edits.push({ at: q.closeEnd, insert: '"'.repeat(3 - quotes), before: true });
+  }
+  if (!edits.length) return false;
+  const cursor = editor.getActiveBufferId() === buf ? editor.getCursorPosition() : -1;
+  // from the end, so the earlier positions stay put
+  edits.sort((a, b) => b.at - a.at);
+  for (const e of edits) editor.insertText(buf, e.at, e.insert);
+  if (cursor >= 0) {
+    const shift = edits.filter((e) => e.at < cursor || (e.at === cursor && !e.before)).reduce((n, e) => n + e.insert.length, 0);
+    editor.setBufferCursor(buf, cursor + shift);
+  }
+  return true;
+}
+
 /** The id of the markdown cell holding `pos` (its `# %%` line included), if any. */
 function markdownCellAt(spans: Span[], pos: number): string | null {
   const s = spans.find((s) => s.start <= pos && pos <= s.end);
@@ -1296,12 +1401,31 @@ function markdownCellAt(spans: Span[], pos: number): string | null {
 }
 
 // the cursor going into a typeset markdown cell shows its source, and leaving it typesets it
-registerHandler("notebook_cursor_moved", (e: { buffer_id: number; new_position: number }) => {
+registerHandler("notebook_cursor_moved", (e: { buffer_id: number; old_position: number; new_position: number }) => {
   for (const nb of byCopy.values()) {
     if (nb.bufferId !== e.buffer_id || !nb.spans) continue;
+    if (offTheQuotes(nb, e.old_position, e.new_position)) return;
     if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb);
   }
 });
+
+/** The cursor on a markdown cell's hidden quote line goes on, to the text (or out of the cell, the
+ *  way it was going). Says whether it moved it. */
+function offTheQuotes(nb: Notebook, from: number, to: number): boolean {
+  // (the spans are the last redraw's: an edit since moves the text, and the redraw follows it)
+  if (nb.bufferId === null || nb.edited) return false;
+  const s = nb.spans?.find((s) => s.quotes && s.quotes.open <= to && to <= s.quotes.closeEnd);
+  const q = s?.quotes;
+  if (!s || !q) return false;
+  let at = -1;
+  // on the `r"""` line: up, to the `# %%` line; down, to the text
+  if (to <= q.openEnd && s.lineStarts[0] > q.openEnd) at = from > to ? s.markerEnd : s.lineStarts[0];
+  // past the text, on the closing quotes: back to the end of the text
+  else if (to > q.close) at = q.close;
+  if (at < 0 || at === to) return false;
+  editor.setBufferCursor(nb.bufferId, at);
+  return true;
+}
 editor.on("cursor_moved", "notebook_cursor_moved");
 
 // a click on a typeset cell: the cursor goes to the markdown under it
@@ -1468,7 +1592,8 @@ async function runAtCursor(advance: boolean): Promise<void> {
   await runCells(nb, [spans[i]]);
   if (advance && spans[i + 1]) {
     const next = spans[i + 1];
-    editor.setBufferCursor(nb.bufferId!, Math.min(next.markerEnd + 1, next.end));
+    editor.setBufferCursor(nb.bufferId!, sourceStart(next));
+    await decorate(nb, sourceStart(next));
   }
 }
 
@@ -1633,8 +1758,17 @@ async function cellsAtCursor(nb: Notebook): Promise<{ text: string; spans: Span[
   const cursor = editor.getCursorPosition();
   const i = Math.max(0, spans.findIndex((s, k) => cursor >= s.start && (k === spans.length - 1 || cursor < spans[k + 1].start)));
   const s = spans[i];
-  const bodyStart = s ? (s.markerEnd > s.start ? s.markerEnd + 1 : s.start) : 0;
-  const offset = s && cursor > bodyStart ? (await editor.getBufferText(nb.bufferId!, bodyStart, cursor)).length : 0;
+  const bodyStart = s ? sourceStart(s) : 0;
+  const shown = s && cursor > bodyStart ? await editor.getBufferText(nb.bufferId!, bodyStart, cursor) : "";
+  // where that is in the cell's source (a comment-form markdown cell's `# `s aren't in it)
+  let offset = shown.length;
+  if (s && s.cell.kind !== "code" && !s.quotes) {
+    const lines = shown.split("\n");
+    const src = s.cell.source.split("\n");
+    const col = lines[lines.length - 1];
+    const k = lines.length - 1;
+    offset = src.slice(0, k).reduce((n, l) => n + l.length + 1, 0) + Math.max(0, col.length - (/^# ?/.exec(col)?.[0].length ?? 0));
+  }
   return { text, spans, i, offset };
 }
 
@@ -1651,8 +1785,8 @@ async function editCells(edit: (cells: Cell[], i: number, offset: number) => num
   const next = cellsToText(cells);
   replaceText(nb.bufferId!, text, next);
   const at = textToCells(next)[Math.max(0, Math.min(target, cells.length - 1))];
-  if (at) editor.setBufferCursor(nb.bufferId!, at.markerEnd > at.start ? Math.min(at.markerEnd + 1, at.end) : at.start);
-  await decorate(nb);
+  if (at) editor.setBufferCursor(nb.bufferId!, sourceStart(at));
+  await decorate(nb, at ? sourceStart(at) : undefined);
 }
 
 const blank = (kind = "code"): Cell => ({ id: newId(), kind, source: "" });
@@ -1669,14 +1803,9 @@ registerHandler("notebook_move_down", () =>
 registerHandler("notebook_split", () =>
   editCells((cells, i, offset) => {
     const c = cells[i];
-    // a markdown cell's source is shown with `# ` before each line: split it at the cursor's line
+    // (a markdown cell splits at the start of the cursor's line)
     let at = offset;
-    if (c.kind !== "code") {
-      const shown = c.source.split("\n").map((l) => (l.length ? "# " + l : "#"));
-      let line = 0, n = 0;
-      while (line < shown.length && n + shown[line].length < offset) n += shown[line++].length + 1;
-      at = c.source.split("\n").slice(0, line).reduce((k, l) => k + l.length + 1, 0);
-    }
+    if (c.kind !== "code") at = c.source.slice(0, offset).lastIndexOf("\n") + 1;
     const before = c.source.slice(0, at).replace(/\n$/, "");
     const after = c.source.slice(at).replace(/^\n/, "");
     if (!before.trim() || !after.trim()) return null;
@@ -1811,9 +1940,10 @@ registerHandler("notebook_redraw", async () => {
   if (nb) await decorate(nb);
 });
 registerHandler("notebook_on_modified", (e: { buffer_id: number }) => {
-  if (pending) return;
   for (const nb of byCopy.values()) {
     if (nb.bufferId === e.buffer_id) {
+      nb.edited = true;
+      if (pending) return;
       pending = true;
       editor.setTimeout(150, "notebook_redraw");
       return;

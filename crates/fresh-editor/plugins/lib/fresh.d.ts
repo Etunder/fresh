@@ -6639,6 +6639,8 @@ interface EditorAPI {
 	* rendering — the line containing `start - 1` (the fold "header")
 	* stays visible, while subsequent lines covered by the range are
 	* skipped.
+	* The header shows `placeholder` after its text (`...` without one;
+	* an empty string shows nothing).
 	*/
 	addFold(bufferId: number, start: number, end: number, placeholder?: string): boolean;
 	/**
