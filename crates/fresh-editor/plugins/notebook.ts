@@ -110,13 +110,20 @@ function markerLine(cell: Cell): string {
   return `# %%${kind} id=${cell.id}`;
 }
 
+/** IPython magics and shell escapes (`%matplotlib inline`, `%%time`, `!pip install x`) aren't
+ *  Python: in the working copy they're behind `#!`, a comment to the language server (shown without
+ *  it), and come back as they were. */
+const MAGIC = /^(%|!)/;
+const HIDDEN_MAGIC = /^#!(?=%|!)/;
+const hideMagics = (src: string) => src.split("\n").map((l) => (MAGIC.test(l) ? "#!" + l : l)).join("\n");
+
 /** Cells as percent-format text. */
 export function cellsToText(cells: Cell[]): string {
   if (cells.length === 0) return markerLine({ id: newId(), kind: "code", source: "" }) + "\n";
   return cells
     .map((c) => {
       const body = c.kind === "code"
-        ? c.source
+        ? hideMagics(c.source)
         : c.source.split("\n").map((l) => (l.length ? "# " + l : "#")).join("\n");
       return markerLine(c) + "\n" + body + (body.endsWith("\n") || body === "" ? "" : "\n");
     })
@@ -147,6 +154,7 @@ export function textToCells(text: string): Span[] {
     // the blank line written between cells belongs to no cell
     if (body.length && body[body.length - 1] === "") body = body.slice(0, -1);
     if (current.span.cell.kind !== "code") body = body.map((l) => l.replace(/^# ?/, ""));
+    else body = body.map((l) => l.replace(HIDDEN_MAGIC, ""));
     current.span.cell.source = body.join("\n");
     current.span.lineStarts = current.span.lineStarts.filter((p) => p <= current!.span.lastLine);
     spans.push(current.span);
@@ -983,6 +991,9 @@ async function decorate(nb: Notebook): Promise<void> {
     lineAt.set(at, line);
     at += bytes(line) + 1;
   }
+  // where a line's text starts on screen: after the hidden `#!` of a magic, which takes whatever is
+  // anchored at its first byte with it
+  const textStart = (p: number) => (HIDDEN_MAGIC.test(lineAt.get(p) ?? "") ? p + 2 : p);
   spans.forEach((s, i) => {
     const r = nb.runs.get(s.cell.id);
     // the `# %%` line as a quiet rule: cell number, kind, run count and state (herdr's muted
@@ -1003,13 +1014,21 @@ async function decorate(nb: Notebook): Promise<void> {
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
       // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
       const band = { fg: "ui.notebook_cell_bg", clip: true };
-      editor.addVirtualLine(buf, bodyStart, "▄".repeat(500), band, true, NS_OUT, -1);
-      editor.addVirtualLine(buf, s.lastLine, "▀".repeat(500), band, false, NS_OUT, -2);
+      editor.addVirtualLine(buf, textStart(bodyStart), "▄".repeat(500), band, true, NS_OUT, -1);
+      editor.addVirtualLine(buf, textStart(s.lastLine), "▀".repeat(500), band, false, NS_OUT, -2);
       // and two columns of it before each line
       s.lineStarts.forEach((p, k) =>
-        editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, p, "  ", { bg: "ui.notebook_cell_bg" }, true));
+        editor.addVirtualTextStyled(buf, `${NS_PAD}${i}:${k}`, textStart(p), "  ", { bg: "ui.notebook_cell_bg" }, true));
     }
     if (s.cell.kind === "markdown") renderMarkdown(nb, buf, s, lineAt);
+    if (s.cell.kind === "code") {
+      for (const p of s.lineStarts) {
+        const line = lineAt.get(p) ?? "";
+        if (!HIDDEN_MAGIC.test(line)) continue;
+        editor.addConceal(buf, NS_MD, p, p + 2, "", "unless-cursor-in", p, p + bytes(line) + 1);
+        editor.addOverlay(buf, NS_MD, p + 2, p + bytes(line), { fg: "syntax.keyword" });
+      }
+    }
     if (!r || s.cell.kind !== "code") return;
     // long text output is cut; image rows are never (half a plot helps nobody)
     let shown = 0;
@@ -1024,7 +1043,7 @@ async function decorate(nb: Notebook): Promise<void> {
     if (!out.length) return;
     out.forEach((l, j) =>
       // three columns in, level with the cell's code (its two-column margin plus the inlay space)
-      editor.addVirtualLine(buf, s.lastLine, "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined, clip: l.clip },
+      editor.addVirtualLine(buf, textStart(s.lastLine), "   " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined, clip: l.clip },
         false, NS_OUT, j + 1));
   });
   dropStaleImages();

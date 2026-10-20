@@ -746,3 +746,64 @@ fn cells_are_edited_with_commands() {
     assert_eq!(req, serde_json::json!({"cells": ["intro", "hello"]}));
     h.assert_no_plugin_errors();
 }
+
+const MAGIC_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "markdown", "id": "intro", "metadata": {}, "source": ["# Plots"]},
+  {"cell_type": "code", "execution_count": null, "id": "setup", "metadata": {}, "outputs": [],
+   "source": ["%matplotlib inline\n", "!pip install -q pandas\n", "x = 1"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// IPython magics sit behind a hidden `#!` in the working copy (a comment to the language server),
+/// show as written, and are saved and run as written.
+#[test]
+fn magics_are_hidden_from_python_but_kept() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("plots.ipynb");
+    fs::write(&nb_path, MAGIC_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("── 2 [ ]"))
+        .unwrap();
+    let screen = h.screen_to_string();
+    assert!(
+        screen.contains("   %matplotlib inline") && !screen.contains("#!%"),
+        "{screen}"
+    );
+    let text = h.get_buffer_content().unwrap();
+    assert!(
+        text.contains("#!%matplotlib inline\n#!!pip install -q pandas\nx = 1"),
+        "{text:?}"
+    );
+
+    // run it (Alt+Enter on the markdown cell moves on, then runs the code cell): nb gets the magic
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("ran: %matplotlib inline"))
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project)[1],
+        (
+            "code".to_string(),
+            "%matplotlib inline\n!pip install -q pandas\nx = 1".to_string()
+        )
+    );
+    h.assert_no_plugin_errors();
+}
