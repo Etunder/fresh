@@ -683,6 +683,10 @@ impl ConfigResolver {
         }
         // User layer's parent is empty (defaults handled during resolve)
 
+        // Under every layer: the herdr edition's defaults, so saving writes what differs from them
+        // (not the herdr theme, status bar or language servers, as if the user had chosen those)
+        merged.merge_from(&herdr_defaults());
+
         Ok(merged)
     }
 
@@ -2229,8 +2233,11 @@ mod tests {
         assert_eq!(reloaded.theme.0, "dracula");
         assert_eq!(reloaded.editor.tab_size, 2);
         assert!(!reloaded.lsp["python"].as_slice()[0].enabled);
-        // Command should come from defaults
-        assert_eq!(reloaded.lsp["python"].as_slice()[0].command, "pylsp");
+        // Command should come from defaults (the herdr edition's: basedpyright)
+        assert_eq!(
+            reloaded.lsp["python"].as_slice()[0].command,
+            "basedpyright-langserver"
+        );
     }
 
     /// Test that toggling LSP enabled/disabled preserves the command field.
