@@ -941,6 +941,11 @@ impl Editor {
             PluginCommand::SetBufferDiffGutter { buffer_id, enabled } => {
                 self.handle_set_buffer_diff_gutter(buffer_id, enabled);
             }
+            PluginCommand::SetBufferTabLabel { buffer_id, label } => {
+                if let Some(meta) = self.active_window_mut().buffer_metadata.get_mut(&buffer_id) {
+                    meta.tab_label = label;
+                }
+            }
             PluginCommand::SetBufferShowCursors { buffer_id, show } => {
                 self.handle_set_buffer_show_cursors(buffer_id, show);
             }

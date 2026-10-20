@@ -5414,6 +5414,11 @@ pub enum PluginCommand {
     /// buffer (e.g. for magit-style row navigation) flip this to `true` after
     /// `createBufferGroup` returns.
     SetBufferShowCursors { buffer_id: BufferId, show: bool },
+    /// Name a buffer's tab (`None`: its file's name again).
+    SetBufferTabLabel {
+        buffer_id: BufferId,
+        label: Option<String>,
+    },
     /// Pick a virtual buffer's grammar by name. `name` is resolved the
     /// same way a virtual buffer's own name is, so an extension in it
     /// (`"stream.diff"`) selects the grammar.

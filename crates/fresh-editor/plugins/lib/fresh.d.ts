@@ -7322,6 +7322,12 @@ interface EditorAPI {
 	*/
 	setBufferShowCursors(bufferId: number, show: boolean): boolean;
 	/**
+	* Name a buffer's tab: what it says instead of the file's name (a
+	* notebook's working copy shown as the notebook). `null` gives the tab
+	* its file's name back.
+	*/
+	setBufferTabLabel(bufferId: number, label: string | null): boolean;
+	/**
 	* Choose the grammar a virtual buffer is highlighted with.
 	* 
 	* Panel buffers are named `*<panel id>*`, which resolves to no

@@ -33,6 +33,11 @@ pub struct BufferMetadata {
     /// Display name for the buffer (project-relative path or filename or *BufferName*)
     pub display_name: String,
 
+    /// What its tab says instead of the file's name, set by a plugin that
+    /// shows a file as something else (a notebook's working copy as the
+    /// notebook)
+    pub tab_label: Option<String>,
+
     /// Whether LSP is enabled for this buffer (always false for virtual buffers)
     pub lsp_enabled: bool,
 
@@ -137,6 +142,7 @@ impl BufferMetadata {
                 uri: None,
             },
             display_name: t!("buffer.no_name").to_string(),
+            tab_label: None,
             lsp_enabled: true,
             lsp_disabled_reason: None,
             read_only: false,
@@ -158,6 +164,7 @@ impl BufferMetadata {
                 uri: None,
             },
             display_name,
+            tab_label: None,
             lsp_enabled: false, // No file path, so no LSP
             lsp_disabled_reason: Some(t!("lsp.disabled.unnamed").to_string()),
             read_only: false,
@@ -218,6 +225,7 @@ impl BufferMetadata {
                 uri: file_uri,
             },
             display_name,
+            tab_label: None,
             lsp_enabled: true,
             lsp_disabled_reason: None,
             read_only: is_library,
@@ -257,6 +265,7 @@ impl BufferMetadata {
                 uri: Some(uri),
             },
             display_name,
+            tab_label: None,
             lsp_enabled: true,
             lsp_disabled_reason: None,
             read_only: true,
@@ -355,6 +364,7 @@ impl BufferMetadata {
         Self {
             kind: BufferKind::Virtual { mode },
             display_name: name,
+            tab_label: None,
             lsp_enabled: false, // Virtual buffers don't use LSP
             lsp_disabled_reason: Some(t!("lsp.disabled.virtual").to_string()),
             auto_revert_enabled: true,

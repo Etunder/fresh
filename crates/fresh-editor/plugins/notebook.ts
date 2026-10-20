@@ -1334,6 +1334,8 @@ function showCopy(nb: Notebook, jsonBuffer: number): void {
 /** The working copy is open in `buffer`: set it up as the notebook's view. */
 function copyOpened(nb: Notebook, buffer: number): void {
   nb.bufferId = buffer;
+  // the tab is the notebook's, not its working copy's (name.ipynb.py)
+  editor.setBufferTabLabel(buffer, nb.ipynb.split(/[\\/]/).pop() ?? nb.ipynb);
   editor.setLineNumbersDefault(buffer, false);
   // the kernel's completions, asked at once after a `.`
   editor.registerCompletionSource(buffer, ".");

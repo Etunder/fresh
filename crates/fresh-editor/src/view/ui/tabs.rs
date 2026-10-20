@@ -223,7 +223,9 @@ pub(crate) fn resolve_tab_names(
                     .then(|| buffers.get(id).and_then(|state| state.buffer.file_path()))
                     .flatten();
 
-                let name = if is_composite_buffer || is_terminal {
+                let name = if let Some(label) = meta.and_then(|m| m.tab_label.as_deref()) {
+                    Some(label)
+                } else if is_composite_buffer || is_terminal {
                     meta.map(|m| m.display_name.as_str())
                 } else {
                     file_path

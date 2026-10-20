@@ -232,6 +232,10 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     .unwrap();
     h.wait_until(|h| h.get_status_bar().contains("○ no kernel yet"))
         .unwrap();
+    // the tab is the notebook's name, not its working copy's
+    h.wait_until(|h| h.screen_to_string().contains(" report.ipynb "))
+        .unwrap();
+    assert!(!h.screen_to_string().contains("report.ipynb.py"));
     // the working copy lives under the data dir, whose other files open read-only
     assert!(
         !h.editor().active_window().is_editing_disabled(),
@@ -1080,7 +1084,13 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
     h.mouse_click(20, row).unwrap();
     h.wait_until(|h| h.screen_to_string().contains("# Some words here."))
         .unwrap();
-    // (typing there shows where it is)
+    // (the cell opens at the click; the cursor lands on the text once nb has said where)
+    h.wait_until(|h| {
+        let at = h.cursor_position();
+        let text = h.get_buffer_content().unwrap_or_default();
+        text.get(at..).is_some_and(|t| t.starts_with("words"))
+    })
+    .unwrap();
     h.type_text("X").unwrap();
     h.wait_until(|h| h.screen_to_string().contains("# Some Xwords here."))
         .unwrap();

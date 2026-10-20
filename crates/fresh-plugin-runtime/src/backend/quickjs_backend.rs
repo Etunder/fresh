@@ -6713,6 +6713,19 @@ impl JsEditorApi {
             .is_ok()
     }
 
+    /// Name a buffer's tab: what it says instead of the file's name (a
+    /// notebook's working copy shown as the notebook). `null` gives the tab
+    /// its file's name back.
+    #[qjs(rename = "setBufferTabLabel")]
+    pub fn set_buffer_tab_label(&self, buffer_id: u32, label: Option<String>) -> bool {
+        self.command_sender
+            .send(PluginCommand::SetBufferTabLabel {
+                buffer_id: BufferId(buffer_id as usize),
+                label,
+            })
+            .is_ok()
+    }
+
     #[plugin_api(section = "Languages & LSP")]
     /// Choose the grammar a virtual buffer is highlighted with.
     ///

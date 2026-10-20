@@ -239,6 +239,16 @@ navigation) call this with `true` after `createBufferGroup` returns.
 setBufferShowCursors(bufferId: number, show: boolean): boolean;
 ```
 
+### `setBufferTabLabel`
+
+Name a buffer's tab: what it says instead of the file's name (a
+notebook's working copy shown as the notebook). `null` gives the tab
+its file's name back.
+
+```typescript
+setBufferTabLabel(bufferId: number, label: string | null): boolean;
+```
+
 ## Text Editing
 
 ### `insertText`
