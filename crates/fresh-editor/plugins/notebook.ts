@@ -442,7 +442,17 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
       }
       break;
     case "output":
-      if (cell) run(nb, cell).outputs.push(e.output as Output);
+      if (cell) {
+        // stream text arrives in pieces (a progress bar's every redraw): one output per stream,
+        // as Jupyter keeps it, so a `\r` in one piece overwrites what the last one printed
+        const outs = run(nb, cell).outputs;
+        const o = e.output as Output;
+        const last = outs[outs.length - 1];
+        if (o.output_type === "stream" && last?.output_type === "stream" && last.name === o.name) {
+          const text = (v: unknown) => (Array.isArray(v) ? v.join("") : String(v ?? ""));
+          outs[outs.length - 1] = { ...last, text: text(last.text) + text(o.text) };
+        } else outs.push(o);
+      }
       break;
     case "clear":
       if (cell) run(nb, cell).outputs = [];

@@ -87,10 +87,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                           "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
                                      "data": {"text/plain": "x**2 + 1", "text/latex": "$\\displaystyle x^{2} + 1$"}}})
                 elif req["code"].startswith("noisy"):
-                    text = "\x1b[31mfailed\x1b[0m twice\n" + "".join(f"\r{p}%" for p in (10, 50, 100)) + "\n"
-                    text += "".join(f"line {k}\n" for k in range(50))
-                    emit({"event": "output", "cell": req["cell"],
-                          "output": {"output_type": "stream", "name": "stdout", "text": text}})
+                    # in pieces, as a kernel sends them: the bar's redraws one by one
+                    pieces = ["\x1b[31mfailed\x1b[0m twice\n"] + [f"\r{p}%" for p in (10, 50, 100)] + ["\n"]
+                    pieces.append("".join(f"line {k}\n" for k in range(50)))
+                    for text in pieces:
+                        emit({"event": "output", "cell": req["cell"],
+                              "output": {"output_type": "stream", "name": "stdout", "text": text}})
                 elif req["code"].startswith("table"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
