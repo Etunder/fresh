@@ -1059,21 +1059,27 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
     await decorate(nb);
     return;
   }
-  if (!e.path.toLowerCase().endsWith(".ipynb")) return;
-  const known = byIpynb.get(e.path);
+  if (e.path.toLowerCase().endsWith(".ipynb")) await openNotebook(e.path, e.buffer_id);
+});
+
+/** A notebook's JSON is showing in `jsonBuffer` (opened, or previewed from the explorer): show its
+ *  cells instead, starting its nb the first time. */
+async function openNotebook(path: string, jsonBuffer: number): Promise<void> {
+  const known = byIpynb.get(path);
   if (known) {
-    // its working copy is open already (restored with it): show that, drop the JSON view
     if (known.bufferId !== null) {
+      // its working copy is open already: show that, drop the JSON view
       editor.openFile(known.copy);
-      editor.closeBuffer(e.buffer_id, true);
+      editor.closeBuffer(jsonBuffer, true);
     } else {
-      showCopy(known, e.buffer_id);
+      // still opening: the JSON view goes once the copy is up
+      known.jsonBuffer = jsonBuffer;
     }
     return;
   }
-  editor.setStatus(`notebook: opening ${editor.pathBasename(e.path)}…`);
-  const nb = start(e.path);
-  byIpynb.set(e.path, nb);
+  editor.setStatus(`notebook: opening ${editor.pathBasename(path)}…`);
+  const nb = start(path);
+  byIpynb.set(path, nb);
   byCopy.set(nb.copy, nb);
   const opened = await ask(nb, "open");
   if (!opened.ok) {
@@ -1084,9 +1090,9 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
     nb.runs.set(id, { count: r.execution_count, outputs: r.outputs, state: "idle" });
   }
   editor.writeFile(nb.copy, cellsToText(opened.cells as Cell[]));
-  showCopy(nb, e.buffer_id);
-  editor.setStatus(`${editor.pathBasename(e.path)} · Shift/Alt+Enter runs a cell · saving writes the notebook`);
-});
+  showCopy(nb, nb.jsonBuffer ?? jsonBuffer);
+  editor.setStatus(`${editor.pathBasename(path)} · Shift/Alt+Enter runs a cell · saving writes the notebook`);
+}
 editor.on("after_file_open", "notebook_after_open");
 
 /** Gives every cell an id in the buffer (a new `# %%` line has none), so outputs stay attached. */
@@ -1318,7 +1324,14 @@ function followMode(): void {
   if (nb && mode == null && editor.getInputMode() == null) editor.setEditorMode("notebook");
   else if (!nb && mode === "notebook") editor.setEditorMode(null);
 }
-registerHandler("notebook_mode_follow", followMode);
+registerHandler("notebook_mode_follow", () => {
+  followMode();
+  // a notebook previewed from the explorer fires no after_file_open: its JSON tab coming to the
+  // front is the cue
+  const id = editor.getActiveBufferId();
+  const path = id ? editor.getBufferPath(id) : "";
+  if (path && path.toLowerCase().endsWith(".ipynb")) void openNotebook(path, id);
+});
 editor.on("buffer_activated", "notebook_mode_follow");
 editor.on("active_buffer_changed", "notebook_mode_follow");
 

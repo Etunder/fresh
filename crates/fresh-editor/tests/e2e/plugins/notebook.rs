@@ -588,3 +588,37 @@ fn a_restored_working_copy_is_attached_to_its_notebook() {
     assert_eq!(cells[1]["source"], "print('edited, unsaved')");
     h.assert_no_plugin_errors();
 }
+
+/// Arrowing through the explorer previews files, which fires no after_file_open: a notebook
+/// previewed that way still shows as its cells, and one already open switches to its view rather
+/// than a second tab of JSON.
+#[test]
+fn a_previewed_notebook_shows_as_cells() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    fs::write(&nb_path, NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    let shows_cells = |h: &EditorTestHarness| {
+        let s = h.screen_to_string();
+        s.contains("print('hello')") && s.contains("── 2 [ ]") && !s.contains("nbformat")
+    };
+    h.editor_mut().open_file_preview(&nb_path).unwrap();
+    h.wait_until(shows_cells).unwrap();
+
+    // previewed again while open: still the one view
+    h.editor_mut().open_file_preview(&nb_path).unwrap();
+    h.wait_until(shows_cells).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.assert_no_plugin_errors();
+}
