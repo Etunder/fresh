@@ -67,7 +67,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
-                if req["code"].startswith("noisy"):
+                if req["code"].startswith("sym"):
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
+                                     "data": {"text/plain": "x**2 + 1", "text/latex": "$\\displaystyle x^{2} + 1$"}}})
+                elif req["code"].startswith("noisy"):
                     text = "\x1b[31mfailed\x1b[0m twice\n" + "".join(f"\r{p}%" for p in (10, 50, 100)) + "\n"
                     text += "".join(f"line {k}\n" for k in range(50))
                     emit({"event": "output", "cell": req["cell"],
@@ -218,7 +222,8 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
     h.wait_until(|h| {
         let s = h.screen_to_string();
-        s.contains("ran: print('hello')") && s.contains("── 2 [1] ✓")
+        // the run's time beside its count
+        s.contains("ran: print('hello')") && s.contains("── 2 [1] ✓ 0.")
     })
     .unwrap();
     // with the cursor out of it, the markdown cell is rendered: no `# ` prefix, no heading mark
@@ -871,5 +876,52 @@ fn output_keeps_colours_progress_bars_settle_and_long_output_expands() {
     palette(&mut h, "Notebook: Expand Output");
     h.wait_until(|h| !h.screen_to_string().contains("more lines"))
         .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+const SYMPY_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "s", "metadata": {}, "outputs": [],
+   "source": ["sym()"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// A formula as a cell's result (sympy's text/latex) is typeset like display math.
+#[test]
+fn a_latex_result_is_typeset() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("sym.ipynb");
+    fs::write(&nb_path, SYMPY_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    let placeholder = '\u{10EEEE}';
+    h.wait_until(|h| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+            == 2
+    })
+    .unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("math.json")).unwrap()).unwrap();
+    assert_eq!(req["latex"], "x^{2} + 1");
     h.assert_no_plugin_errors();
 }

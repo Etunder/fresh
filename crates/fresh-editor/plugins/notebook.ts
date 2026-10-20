@@ -51,7 +51,25 @@ const NS_MD = "notebook-md";
 
 type Cell = { id: string; kind: string; source: string };
 type Output = Record<string, unknown>;
-type Run = { count: number | null; outputs: Output[]; state: "idle" | "queued" | "busy" | "ok" | "error"; expanded?: boolean };
+type Run = {
+  count: number | null;
+  outputs: Output[];
+  state: "idle" | "queued" | "busy" | "ok" | "error";
+  expanded?: boolean;
+  /** When it started running, and how long it took (ms), for the rule's timing. */
+  startedAt?: number;
+  took?: number;
+};
+
+/** A run's time the way the rule shows it: 0.42s, 3.1s, 12s, 2m 05s. */
+function duration(ms: number): string {
+  const s = ms / 1000;
+  if (s < 1) return `${s.toFixed(2)}s`;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${String(Math.round(s - 60 * m)).padStart(2, "0")}s`;
+}
 
 type Notebook = {
   ipynb: string;
@@ -418,6 +436,9 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
         const r = run(nb, cell);
         r.state = "busy";
         r.outputs = [];
+        r.startedAt = Date.now();
+        r.took = undefined;
+        tick();
       }
       break;
     case "output":
@@ -432,6 +453,7 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
         // aborted: queued behind a cell that failed or was interrupted, so it never ran
         r.state = e.status === "ok" ? "ok" : e.status === "aborted" ? "idle" : "error";
         if (typeof e.execution_count === "number") r.count = e.execution_count;
+        if (r.startedAt !== undefined && r.state !== "idle") r.took = Date.now() - r.startedAt;
       }
       break;
     case "error":
@@ -442,6 +464,20 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
   showKernel(nb);
   void decorate(nb);
 }
+
+/** While a cell runs, its rule's clock is redrawn every second. */
+let ticking = false;
+function tick(): void {
+  if (ticking) return;
+  ticking = true;
+  editor.setTimeout(1000, "notebook_tick");
+}
+registerHandler("notebook_tick", async () => {
+  ticking = false;
+  const busy = [...byCopy.values()].filter((nb) => [...nb.runs.values()].some((r) => r.state === "busy"));
+  for (const nb of busy) await decorate(nb);
+  if (busy.length) tick();
+});
 
 // ── the status bar's kernel token ────────────────────────────────────
 
@@ -778,9 +814,9 @@ const formulas = new Map<string, Image | "pending" | "failed">();
 
 /** The typeset image of a formula, or null while it's on its way (the notebook is redrawn when it
  *  comes) or if Typst can't make it out. */
-function formulaImage(nb: Notebook, latex: string): Image | null {
+function formulaImage(nb: Notebook, latex: string, colorKey = "syntax.number"): Image | null {
   if (!IMAGES) return null;
-  const color = themeHex("syntax.number", "#ff9e64");
+  const color = themeHex(colorKey, colorKey === "syntax.number" ? "#ff9e64" : "#c0caf5");
   const key = `${color} ${latex}`;
   const known = formulas.get(key);
   if (known !== undefined) return typeof known === "string" ? null : known;
@@ -887,7 +923,7 @@ function tableLines(t: { rows: { cells: string[]; head: boolean }[]; note: strin
 }
 
 /** An output's lines: its text in the colour it draws in, or the rows of its image. */
-function outputLines(o: Output): OutLine[] {
+function outputLines(nb: Notebook, o: Output): OutLine[] {
   const join = (v: unknown) => (Array.isArray(v) ? v.join("") : String(v ?? ""));
   const lines = (s: string, fg: string): OutLine[] =>
     s.replace(/\n$/, "").split("\n").map((raw) => {
@@ -914,6 +950,16 @@ function outputLines(o: Output): OutLine[] {
           const fg = imageFg(img);
           return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));
         }
+      }
+      // a formula (sympy's text/latex: `$\displaystyle …$`), typeset like display math
+      if (data["text/latex"] !== undefined && !image) {
+        const latex = join(data["text/latex"]).trim().replace(/^\$\$?|\$\$?$/g, "").replace(/^\\displaystyle\s*/, "").trim();
+        const img = latex ? formulaImage(nb, latex, "editor.fg") : null;
+        if (img) {
+          const fg = imageFg(img);
+          return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img, row), fg }));
+        }
+        if (latex) return [{ text: latexToUnicode(latex), fg: "editor.fg" }];
       }
       const html = data["text/html"] !== undefined ? htmlTable(join(data["text/html"])) : null;
       if (html) return tableLines(html);
@@ -1061,8 +1107,10 @@ async function decorate(nb: Notebook): Promise<void> {
     // the `# %%` line as a quiet rule: cell number, kind, run count and state (herdr's muted
     // overlay tone, the comment colour); the raw line comes back while the cursor is on it
     if (s.markerEnd > s.start) {
-      const state = !r ? "" : r.state === "busy" ? " ● running" : r.state === "queued" ? " ○ queued"
-        : r.state === "error" ? " ✗" : r.state === "ok" ? " ✓" : "";
+      const took = r?.took !== undefined ? ` ${duration(r.took)}` : "";
+      const state = !r ? "" : r.state === "busy" ? ` ● running ${duration(Date.now() - (r.startedAt ?? Date.now()))}`
+        : r.state === "queued" ? " ○ queued"
+        : r.state === "error" ? ` ✗${took}` : r.state === "ok" ? ` ✓${took}` : "";
       const count = s.cell.kind === "code" ? (r?.count != null ? ` [${r.count}]` : " [ ]") : ` ${s.cell.kind}`;
       const label = `── ${i + 1}${count}${state} `;
       editor.addConceal(buf, NS_RULE, s.start, s.markerEnd, label + "─".repeat(Math.max(4, 48 - label.length)),
@@ -1095,7 +1143,7 @@ async function decorate(nb: Notebook): Promise<void> {
     // long text output is cut (unless expanded); image rows are never (half a plot helps nobody)
     let shown = 0;
     let more = 0;
-    const out: OutLine[] = r.outputs.flatMap(outputLines).filter((l) => {
+    const out: OutLine[] = r.outputs.flatMap((o) => outputLines(nb, o)).filter((l) => {
       if (Array.isArray(l.fg) && !l.spans) return true;
       if (r.expanded || shown < MAX_OUTPUT_LINES) return ++shown > 0;
       more++;
