@@ -14,7 +14,7 @@
 //
 // Keys in a notebook: Shift+Enter (or Alt+Enter) run the cell and move to the next, Ctrl+Enter run
 // it and stay.
-// Palette: "Notebook: Run All", "Notebook: Restart Kernel".
+// Palette: "Notebook: Run All", "Notebook: Interrupt Kernel", "Notebook: Restart Kernel".
 //
 // Images (plots) show inline with the kitty graphics protocol's Unicode placeholders, which herdr
 // passes through to WezTerm: the PNG goes to the terminal once (`writeTerminalGraphics`), and the
@@ -291,7 +291,8 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
     case "done":
       if (cell) {
         const r = run(nb, cell);
-        r.state = e.status === "ok" ? "ok" : "error";
+        // aborted: queued behind a cell that failed or was interrupted, so it never ran
+        r.state = e.status === "ok" ? "ok" : e.status === "aborted" ? "idle" : "error";
         if (typeof e.execution_count === "number") r.count = e.execution_count;
       }
       break;
@@ -659,6 +660,14 @@ registerHandler("notebook_restart", async () => {
 editor.registerCommand("Notebook: Run Cell", "Run the cell under the cursor and move to the next", "notebook_run_advance", "notebook");
 editor.registerCommand("Notebook: Run Cell and Stay", "Run the cell under the cursor", "notebook_run_stay", "notebook");
 editor.registerCommand("Notebook: Run All", "Run every code cell, top to bottom", "notebook_run_all", "notebook");
+registerHandler("notebook_interrupt", async () => {
+  const nb = active();
+  if (!nb) return;
+  const r = await ask(nb, "interrupt");
+  editor.setStatus(r.ok ? "notebook: interrupted; the kernel and its variables are kept" : `notebook: ${r.message}`);
+});
+
+editor.registerCommand("Notebook: Interrupt Kernel", "Stop the running cell (and the ones queued after it), keeping the kernel and its variables", "notebook_interrupt", "notebook");
 editor.registerCommand("Notebook: Restart Kernel", "Stop the kernel, even mid-cell; the next run starts a new one", "notebook_restart", "notebook");
 
 // Shift+Enter / Ctrl+Enter in a notebook; everything else types and edits as usual.

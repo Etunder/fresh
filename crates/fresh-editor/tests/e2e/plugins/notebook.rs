@@ -75,6 +75,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "stream", "name": "stdout", "text": "ran: " + req["code"] + "\n"}})
                 emit({"event": "done", "cell": req["cell"], "status": "ok", "execution_count": count[0]})
+            elif url.path == "/interrupt":
+                open(os.path.join(os.path.dirname(notebook), "interrupted"), "w").close()
             elif url.path == "/save":
                 with open(saved, "w") as f:
                     json.dump(req["cells"], f)
@@ -185,6 +187,15 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
             {"id": "hello", "kind": "code", "source": "print('hello')"}
         ])
     );
+
+    // the palette's interrupt reaches nb
+    h.send_key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_for_prompt().unwrap();
+    h.type_text("Notebook: Interrupt Kernel").unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    let interrupted = project.join("interrupted");
+    h.wait_until(|_| interrupted.exists()).unwrap();
     h.assert_no_plugin_errors();
 }
 
