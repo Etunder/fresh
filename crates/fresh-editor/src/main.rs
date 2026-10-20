@@ -6432,6 +6432,11 @@ where
     // screensaver after the configured idle period. Read from the editor's
     // injected time source so tests can drive idle time deterministically.
     let mut last_input_time = editor.time_source().now();
+    // When something last happened (input, async messages, a render): a quarter second after
+    // it the loop polls every 2 ms, so a chain of async hops (a plugin asking a process, its
+    // answer, the redraw) isn't held 50 ms at each one.
+    const ACTIVE_SPELL: Duration = Duration::from_millis(250);
+    let mut last_activity = Instant::now();
 
     loop {
         // Apply any nested-forward requests (file/dir opens from a `fresh`
@@ -6449,6 +6454,7 @@ where
                 Ok(())
             })? {
                 needs_render = true;
+                last_activity = Instant::now();
             }
         }
 
@@ -6524,6 +6530,10 @@ where
         } else {
             let mut timeout = if needs_render {
                 FRAME_DURATION.saturating_sub(last_render.elapsed())
+            } else if last_activity.elapsed() < ACTIVE_SPELL {
+                // just after work, the next step of a chain is likely already on its way (a
+                // plugin's answer, a process's output): look again soon rather than in 50 ms
+                Duration::from_millis(2)
             } else {
                 Duration::from_millis(50)
             };
@@ -6554,6 +6564,7 @@ where
 
         // A real input event arrived — reset the screensaver idle clock.
         last_input_time = editor.time_source().now();
+        last_activity = Instant::now();
 
         let (event, next) = coalesce_mouse_moves(event)?;
         pending_event = next;
