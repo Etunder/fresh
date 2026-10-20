@@ -527,9 +527,12 @@ async function decorate(nb: Notebook): Promise<void> {
       return false;
     });
     if (more) out.push({ text: `… ${more} more lines`, fg: "editor.line_number_fg" });
+    if (!out.length) return;
+    // a blank row between the cell and its outputs, so the two don't run together
+    editor.addVirtualLine(buf, s.lastLine, "", { fg: "editor.fg" }, false, NS_OUT, 0);
     out.forEach((l, j) =>
       editor.addVirtualLine(buf, s.lastLine, "  " + l.text, { fg: l.fg, gutterGlyph: j === 0 ? "›" : undefined },
-        false, NS_OUT, j));
+        false, NS_OUT, j + 1));
   });
   dropStaleImages();
 }
