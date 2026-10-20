@@ -92,6 +92,7 @@
     "suggestion_selected_source_fg": [26, 27, 38],
     "quick_open_hints_fg": [105, 113, 150],
     "quick_open_hints_bg": [36, 40, 59],
+    "notebook_cell_bg": [22, 22, 30],
     "help_bg": [26, 27, 38],
     "help_fg": [192, 202, 245],
     "help_key_fg": [122, 162, 247],

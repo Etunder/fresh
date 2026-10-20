@@ -99,6 +99,7 @@
         "suggestion_selected_source_fg": null,
         "quick_open_hints_fg": null,
         "quick_open_hints_bg": null,
+        "notebook_cell_bg": null,
         "status_separator_fg": null,
         "status_separator_bg": null,
         "status_lsp_on_fg": null,
@@ -1129,6 +1130,18 @@
         },
         "quick_open_hints_bg": {
           "description": "Quick-open mode hints background (falls back to suggestion_selected_bg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "notebook_cell_bg": {
+          "description": "Background of a notebook code cell's source, full width (falls back to editor.current_line_bg)",
           "anyOf": [
             {
               "$ref": "#/$defs/StyledColorDef"

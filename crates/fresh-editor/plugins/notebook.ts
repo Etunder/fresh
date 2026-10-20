@@ -45,6 +45,7 @@ const IMAGE_MAX_COLUMNS = editor.defineConfigInteger("imageMaxColumns", {
 const MAX_OUTPUT_LINES = 40;
 const NS_OUT = "notebook-out";
 const NS_RULE = "notebook-rule";
+const NS_CELL = "notebook-cell";
 
 type Cell = { id: string; kind: string; source: string };
 type Output = Record<string, unknown>;
@@ -120,7 +121,7 @@ export function cellsToText(cells: Cell[]): string {
     .join("\n");
 }
 
-type Span = { cell: Cell; start: number; markerEnd: number; lastLine: number; end: number; hasId: boolean };
+type Span = { cell: Cell; start: number; markerEnd: number; lastLine: number; lastEnd: number; end: number; hasId: boolean };
 
 /** The cells of percent-format text, with where each sits (byte offsets). */
 export function textToCells(text: string): Span[] {
@@ -148,6 +149,7 @@ export function textToCells(text: string): Span[] {
           start: offset,
           markerEnd: lineEnd,
           lastLine: offset,
+          lastEnd: lineEnd,
           end: lineEnd,
           hasId: m[2] !== undefined,
         },
@@ -157,12 +159,15 @@ export function textToCells(text: string): Span[] {
       current.body.push(line);
       // outputs hang under the cell's last line with text (the line at the very end of the file
       // draws no virtual lines)
-      if (line.trim() !== "") current.span.lastLine = offset;
+      if (line.trim() !== "") {
+        current.span.lastLine = offset;
+        current.span.lastEnd = lineEnd;
+      }
       current.span.end = lineEnd;
     } else if (line.trim() !== "") {
       // text before the first marker: a code cell of its own
       current = {
-        span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, end: lineEnd, hasId: false },
+        span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false },
         body: [line],
       };
     }
@@ -504,6 +509,7 @@ async function decorate(nb: Notebook): Promise<void> {
   const spans = textToCells(text);
   editor.clearVirtualTextNamespace(buf, NS_OUT);
   editor.clearConcealNamespace(buf, NS_RULE);
+  editor.clearNamespace(buf, NS_CELL);
   spans.forEach((s, i) => {
     const r = nb.runs.get(s.cell.id);
     // the `# %%` line as a quiet rule: cell number, kind, run count and state (herdr's muted
@@ -515,6 +521,12 @@ async function decorate(nb: Notebook): Promise<void> {
       const label = `── ${i + 1}${count}${state} `;
       editor.addConceal(buf, NS_RULE, s.start, s.markerEnd, label + "─".repeat(Math.max(4, 48 - label.length)),
         "unless-cursor-in", s.start, s.markerEnd + 1);
+    }
+    // a code cell's source on its own ground, the full width, like a notebook's cell box (the
+    // rule above it and the outputs below stay on the editor's)
+    const bodyStart = s.markerEnd > s.start ? s.markerEnd + 1 : s.start;
+    if (s.cell.kind === "code" && s.lastEnd > bodyStart) {
+      editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
     }
     if (!r || s.cell.kind !== "code") return;
     // long text output is cut; image rows are never (half a plot helps nobody)

@@ -753,6 +753,9 @@ pub struct UiColors {
     /// Quick-open mode hints background (falls back to suggestion_selected_bg)
     #[serde(default)]
     pub quick_open_hints_bg: Option<StyledColorDef>,
+    /// Background of a notebook code cell's source, full width (falls back to editor.current_line_bg)
+    #[serde(default)]
+    pub notebook_cell_bg: Option<StyledColorDef>,
     /// Status bar separator glyph text color (falls back to status_bar_fg)
     #[serde(default)]
     pub status_separator_fg: Option<StyledColorDef>,
@@ -1185,6 +1188,7 @@ pub struct Theme {
     pub suggestion_selected_source_fg: Color,
     pub quick_open_hints_fg: Color,
     pub quick_open_hints_bg: Color,
+    pub notebook_cell_bg: Color,
     /// Status bar palette shortcut hint colors (default: same as status bar)
     pub status_palette_fg: Color,
     pub status_palette_bg: Color,
@@ -1460,6 +1464,7 @@ impl From<ThemeFile> for Theme {
             suggestion_selected_source_fg: styled_color(&file.ui.suggestion_selected_source_fg),
             quick_open_hints_fg: styled_color(&file.ui.quick_open_hints_fg),
             quick_open_hints_bg: styled_color(&file.ui.quick_open_hints_bg),
+            notebook_cell_bg: styled_color(&file.ui.notebook_cell_bg),
             status_palette_fg: styled_color(&file.ui.status_palette_fg),
             status_palette_bg: styled_color(&file.ui.status_palette_bg),
             status_separator_fg: styled_color(&file.ui.status_separator_fg),
@@ -1651,6 +1656,7 @@ impl From<Theme> for ThemeFile {
                 suggestion_selected_source_fg: styled(&theme, "ui.suggestion_selected_source_fg"),
                 quick_open_hints_fg: styled(&theme, "ui.quick_open_hints_fg"),
                 quick_open_hints_bg: styled(&theme, "ui.quick_open_hints_bg"),
+                notebook_cell_bg: styled(&theme, "ui.notebook_cell_bg"),
                 status_palette_fg: styled(&theme, "ui.status_palette_fg"),
                 status_palette_bg: styled(&theme, "ui.status_palette_bg"),
                 status_separator_fg: styled(&theme, "ui.status_separator_fg"),
@@ -2421,6 +2427,7 @@ theme_color_keys! {
         "menu_hover_bg" => color menu_hover_bg fallback "ui.menu_highlight_bg",
         "menu_hover_fg" => color menu_hover_fg fallback "ui.menu_highlight_fg",
         "menu_separator_fg" => color menu_separator_fg fallback "ui.menu_border_fg",
+        "notebook_cell_bg" => color notebook_cell_bg fallback "editor.current_line_bg",
         "popup_bg" => color popup_bg,
         "popup_border_fg" => color popup_border_fg,
         "popup_selection_bg" => color popup_selection_bg,
