@@ -1091,6 +1091,9 @@ impl Editor {
             PluginCommand::SetStatus { message } => {
                 self.handle_set_status(message);
             }
+            PluginCommand::WriteTerminalGraphics { commands } => {
+                self.queue_terminal_graphics(commands.as_bytes());
+            }
             PluginCommand::ApplyTheme { theme_name } => {
                 self.apply_theme(&theme_name);
             }

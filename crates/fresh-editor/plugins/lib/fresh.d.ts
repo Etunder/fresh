@@ -5231,6 +5231,16 @@ interface EditorAPI {
 	* @param msg - Text to display; keep short (status bar has limited width)
 	*/
 	setStatus(msg: string): void;
+	/**
+	* Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+	* image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+	* lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+	* the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+	* 
+	* @param commands - one or more complete `ESC _ G … ESC \` sequences and nothing else
+	* @returns false, sending nothing, when `commands` holds anything but such sequences
+	*/
+	writeTerminalGraphics(commands: string): boolean;
 	copyToClipboard(text: string): void;
 	/**
 	* Copy text to the clipboard.

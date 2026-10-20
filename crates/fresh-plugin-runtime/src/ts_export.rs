@@ -1702,6 +1702,7 @@ mod tests {
             "warn",
             "error",
             "setStatus",
+            "writeTerminalGraphics",
             "copyToClipboard",
             "setClipboard",
             "registerCommand",

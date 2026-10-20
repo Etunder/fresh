@@ -103,6 +103,7 @@ const METHOD_PAGES: &[PageSpec] = &[
         sections: &[
             "Overlays",
             "Virtual Text",
+            "Terminal Graphics",
             "Conceals",
             "Soft Breaks & Layout Hints",
             "Folds",

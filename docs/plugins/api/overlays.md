@@ -266,6 +266,25 @@ Force refresh of line display
 refreshLines(bufferId: number): boolean;
 ```
 
+## Terminal Graphics
+
+### `writeTerminalGraphics`
+
+Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+
+```typescript
+writeTerminalGraphics(commands: string): boolean;
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `commands` | one or more complete `ESC _ G … ESC \` sequences and nothing else |
+
+**Returns:** false, sending nothing, when `commands` holds anything but such sequences
+
 ## Conceals
 
 ### `addConceal`

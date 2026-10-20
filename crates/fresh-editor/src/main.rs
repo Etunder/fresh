@@ -6505,6 +6505,12 @@ where
                 let _span = tracing::info_span!("terminal_draw").entered();
                 use crossterm::ExecutableCommand;
                 stdout().execute(crossterm::terminal::BeginSynchronizedUpdate)?;
+                // Plugin graphics (images uploaded before the placeholders that show them)
+                let graphics = editor.take_pending_escape_sequences();
+                if !graphics.is_empty() {
+                    use std::io::Write;
+                    stdout().write_all(&graphics)?;
+                }
                 terminal.draw(|frame| editor.render(frame))?;
                 stdout().execute(crossterm::terminal::EndSynchronizedUpdate)?;
             }

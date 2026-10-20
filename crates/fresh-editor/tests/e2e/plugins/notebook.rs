@@ -29,6 +29,8 @@ const FAKE_NB: &str = r#"#!/usr/bin/env python3
 import http.server, json, os, sys, urllib.parse, uuid
 
 notebook = sys.argv[2]
+# an 80x48 px PNG: 10x3 cells at herdr's 8x16
+PNG = "iVBORw0KGgoAAAANSUhEUgAAAFAAAAAwCAIAAAAJh2qgAAAAUklEQVR4nO3PAQkAMAzAsEmbf1O/jEMfqIBmzu5XzfMDYGBgYGBg4G8CrgdcD7gecD3gesD1gOsB1wOuB1wPuB5wPeB6wPWA6wHXA64HXA+43gUuHnJLsVlJ8gAAAABJRU5ErkJggg=="
 saved = os.path.join(os.path.dirname(notebook), "saved.json")
 token = uuid.uuid4().hex
 count = [0]
@@ -65,8 +67,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({"event": "kernel", "state": "starting", "name": "/work/repo/.venv/bin/python"})
                     emit({"event": "kernel", "state": "ready"})
                 emit({"event": "busy", "cell": req["cell"]})
-                emit({"event": "output", "cell": req["cell"],
-                      "output": {"output_type": "stream", "name": "stdout", "text": "ran: " + req["code"] + "\n"}})
+                if req["code"].startswith("plot"):
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "display_data", "metadata": {},
+                                     "data": {"image/png": PNG, "text/plain": "<Figure 80x48>"}}})
+                else:
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "stream", "name": "stdout", "text": "ran: " + req["code"] + "\n"}})
                 emit({"event": "done", "cell": req["cell"], "status": "ok", "execution_count": count[0]})
             elif url.path == "/save":
                 with open(saved, "w") as f:
@@ -177,6 +184,81 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
             {"id": "intro", "kind": "markdown", "source": "# Report"},
             {"id": "hello", "kind": "code", "source": "print('hello')"}
         ])
+    );
+    h.assert_no_plugin_errors();
+}
+
+const PLOT_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "plot", "metadata": {}, "outputs": [],
+   "source": ["plot()"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// A PNG output goes to the terminal once as kitty graphics (upload + a virtual placement) and shows
+/// as rows of Unicode placeholders under the cell, coloured with the image id.
+#[test]
+fn an_image_output_is_drawn_with_kitty_placeholders() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("plot.ipynb");
+    fs::write(&nb_path, PLOT_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    // the notebook keys work once the badge says so
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    let placeholder = '\u{10EEEE}';
+    h.wait_until(|h| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+            == 3
+    })
+    .unwrap();
+
+    // 10 placeholder cells per row, each with its own row and column diacritics, in the id colour
+    let buffer = h.buffer();
+    let cells: Vec<_> = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buffer.cell((x, y)))
+        .filter(|c| c.symbol().starts_with(placeholder))
+        .collect();
+    assert_eq!(cells.len(), 30);
+    assert!(cells
+        .iter()
+        .all(|c| c.fg == ratatui::style::Color::Rgb(0x4e, 0x42, 0x00)));
+    assert_eq!(cells[0].symbol(), "\u{10EEEE}\u{305}\u{305}");
+    assert_eq!(
+        cells[11].symbol(),
+        "\u{10EEEE}\u{30D}\u{30D}",
+        "row 1, column 1"
+    );
+
+    // the PNG went up once, then the virtual placement of 10x3 cells
+    let sent = String::from_utf8(h.editor_mut().take_pending_escape_sequences()).unwrap();
+    assert!(
+        sent.starts_with("\x1b_Ga=t,f=100,i=5128704,q=2,m=0;iVBORw0KGgo"),
+        "{sent:?}"
+    );
+    assert!(
+        sent.ends_with("\x1b_Ga=p,U=1,i=5128704,c=10,r=3,q=2\x1b\\"),
+        "{sent:?}"
     );
     h.assert_no_plugin_errors();
 }

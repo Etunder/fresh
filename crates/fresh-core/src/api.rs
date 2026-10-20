@@ -3863,6 +3863,10 @@ pub enum PluginCommand {
     /// Set status message
     SetStatus { message: String },
 
+    /// Kitty graphics protocol commands (`ESC _ G … ESC \`), written to the terminal ahead of the
+    /// next frame. Already checked to hold nothing else.
+    WriteTerminalGraphics { commands: String },
+
     /// Apply a theme by name
     ApplyTheme { theme_name: String },
 

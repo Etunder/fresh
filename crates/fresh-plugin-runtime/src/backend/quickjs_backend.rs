@@ -115,6 +115,28 @@ type PluginApiExports =
 /// A `WidgetSpec` from a plugin, or why it isn't one: malformed JSON, or
 /// a `List`/`Tree` whose item keys don't match its items one to one (see
 /// `WidgetSpec::item_keys_problem`).
+/// Whether `s` is one or more complete kitty graphics commands (`ESC _ G … ESC \`) and nothing
+/// else: no other escapes, no control bytes, nothing between them.
+fn is_kitty_graphics(s: &str) -> bool {
+    let mut rest = s;
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let Some(body) = rest.strip_prefix("\x1b_G") else {
+            return false;
+        };
+        let Some(end) = body.find("\x1b\\") else {
+            return false;
+        };
+        if body[..end].bytes().any(|b| b < 0x20 || b == 0x7f) {
+            return false;
+        }
+        rest = &body[end + 2..];
+    }
+    true
+}
+
 fn parse_widget_spec(json: serde_json::Value) -> Result<fresh_core::api::WidgetSpec, String> {
     let spec: fresh_core::api::WidgetSpec =
         serde_json::from_value(json).map_err(|e| e.to_string())?;
@@ -1437,6 +1459,24 @@ impl JsEditorApi {
         let _ = self
             .command_sender
             .send(PluginCommand::SetStatus { message: msg });
+    }
+
+    #[plugin_api(section = "Terminal Graphics")]
+
+    /// Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+    /// image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+    /// lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+    /// the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+    ///
+    /// @param commands - one or more complete `ESC _ G … ESC \` sequences and nothing else
+    /// @returns false, sending nothing, when `commands` holds anything but such sequences
+    pub fn write_terminal_graphics(&self, commands: String) -> bool {
+        if !is_kitty_graphics(&commands) {
+            return false;
+        }
+        self.command_sender
+            .send(PluginCommand::WriteTerminalGraphics { commands })
+            .is_ok()
     }
 
     #[plugin_api(section = "Clipboard")]
@@ -11660,6 +11700,25 @@ mod tests {
     }
 
     // ==================== API Tests ====================
+
+    #[test]
+    fn kitty_graphics_commands_and_nothing_else() {
+        assert!(is_kitty_graphics("\x1b_Ga=t,f=100,i=7,q=2;iVBOR\x1b\\"));
+        assert!(is_kitty_graphics(
+            "\x1b_Ga=t,m=1;AAAA\x1b\\\x1b_Gm=0;BBBB\x1b\\"
+        ));
+        for bad in [
+            "",
+            "plain text",
+            "\x1b_Ga=t;AAAA",            // unterminated
+            "\x1b]52;c;aGk=\x07",        // another escape
+            "\x1b_Ga=t;AA\x1b\\\x1b[2J", // a trailing escape
+            "\x1b_Ga=t;A\x1b[2JA\x1b\\", // an escape inside
+            "x\x1b_Ga=t;AAAA\x1b\\",     // text before
+        ] {
+            assert!(!is_kitty_graphics(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn test_api_set_status() {
