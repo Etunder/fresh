@@ -456,6 +456,13 @@ function onEvent(nb: Notebook, e: Record<string, unknown>): void {
         if (r.startedAt !== undefined && r.state !== "idle") r.took = Date.now() - r.startedAt;
       }
       break;
+    case "input": {
+      // input() in the running cell: asked in a prompt; Esc interrupts the cell
+      asking = nb;
+      const prompt = String(e.prompt ?? "").trimEnd();
+      editor.startPrompt(`${prompt || "input()"}${e.password ? " (shown as typed)" : ""} `, "notebook-input");
+      return;
+    }
     case "error":
       editor.setStatus(`notebook: ${String(e.message).split("\n")[0]}`);
       if (cell) run(nb, cell).state = "error";
@@ -478,6 +485,25 @@ registerHandler("notebook_tick", async () => {
   for (const nb of busy) await decorate(nb);
   if (busy.length) tick();
 });
+
+/** The notebook whose running cell waits for an answer to input(). */
+let asking: Notebook | null = null;
+registerHandler("notebook_input_answered", async (e: { prompt_type: string; input: string }) => {
+  if (e.prompt_type !== "notebook-input" || !asking) return;
+  const nb = asking;
+  asking = null;
+  const r = await ask(nb, "input", { value: e.input });
+  if (!r.ok) editor.setStatus(`notebook: ${r.message}`);
+});
+editor.on("prompt_confirmed", "notebook_input_answered");
+registerHandler("notebook_input_cancelled", async (e: { prompt_type: string }) => {
+  if (e.prompt_type !== "notebook-input" || !asking) return;
+  const nb = asking;
+  asking = null;
+  await ask(nb, "interrupt");
+  editor.setStatus("notebook: input cancelled, the cell interrupted");
+});
+editor.on("prompt_cancelled", "notebook_input_cancelled");
 
 // ── the status bar's kernel token ────────────────────────────────────
 

@@ -34,6 +34,7 @@ PNG = "iVBORw0KGgoAAAANSUhEUgAAAFAAAAAwCAIAAAAJh2qgAAAAUklEQVR4nO3PAQkAMAzAsEmbf
 saved = os.path.join(os.path.dirname(notebook), "saved.json")
 token = uuid.uuid4().hex
 count = [0]
+waiting = []
 
 def emit(event):
     print(json.dumps(event), flush=True)
@@ -61,6 +62,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                  for c in nb["cells"]]
                 body["language"] = "python"
                 body["runs"] = {}
+            elif url.path == "/input":
+                cell = waiting.pop()
+                emit({"event": "output", "cell": cell,
+                      "output": {"output_type": "stream", "name": "stdout", "text": "hi " + req["value"] + "\n"}})
+                emit({"event": "done", "cell": cell, "status": "ok", "execution_count": count[0]})
+            elif url.path == "/run" and req["code"].startswith("ask"):
+                count[0] += 1
+                emit({"event": "busy", "cell": req["cell"]})
+                waiting.append(req["cell"])
+                emit({"event": "input", "cell": req["cell"], "prompt": "name? ", "password": False})
             elif url.path == "/run":
                 count[0] += 1
                 if count[0] == 1:
@@ -865,8 +876,12 @@ fn output_keeps_colours_progress_bars_settle_and_long_output_expands() {
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
-    h.wait_until(|h| h.screen_to_string().contains("failed twice"))
-        .unwrap();
+    // the output's lines come in one by one: wait for its last one, the "more lines" note
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("failed twice") && s.contains("… 12 more lines")
+    })
+    .unwrap();
     let screen = h.screen_to_string();
     assert!(
         !screen.contains("[31m") && !screen.contains("50%"),
@@ -967,5 +982,35 @@ fn an_svg_output_is_converted_and_drawn() {
     let req: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(project.join("topng.json")).unwrap()).unwrap();
     assert_eq!(req["mime"], "image/svg+xml");
+    h.assert_no_plugin_errors();
+}
+
+/// input() in a running cell is asked for in a prompt; the answer goes back to the kernel.
+#[test]
+fn input_is_asked_in_a_prompt() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("ask.ipynb");
+    fs::write(&nb_path, SYMPY_NOTEBOOK.replace("sym()", "ask()")).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("name? "))
+        .unwrap();
+    h.type_text("Ada").unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("hi Ada"))
+        .unwrap();
     h.assert_no_plugin_errors();
 }
