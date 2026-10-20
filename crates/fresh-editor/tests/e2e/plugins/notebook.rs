@@ -334,10 +334,14 @@ fn display_math_is_typeset_as_an_image() {
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
-    h.wait_until(|h| !h.screen_to_string().contains("$$")).unwrap();
+    h.wait_until(|h| !h.screen_to_string().contains("$$"))
+        .unwrap();
     let screen = h.screen_to_string();
     assert!(screen.contains("   Euler:"), "{screen}");
     assert_eq!(rows(&h), 2, "{screen}");
-    assert!(!screen.contains("e^{"), "no Unicode fallback once typeset:\n{screen}");
+    assert!(
+        !screen.contains("e^{"),
+        "no Unicode fallback once typeset:\n{screen}"
+    );
     h.assert_no_plugin_errors();
 }
