@@ -1152,28 +1152,19 @@ interface FreshConfig {
   */
   locale?: FreshConfig.LocaleOptions;
   /**
-  * Check for new versions on startup (default: true).
-  * Also sends basic anonymous telemetry (version, OS, terminal type).
+  * Check for new versions on startup (default: false in this fork: the check asks upstream
+  * Fresh, whose releases are not this build, and sends basic anonymous telemetry).
   *
-  * Default: `true`
+  * Default: `false`
   */
   check_for_updates?: boolean;
   /**
-  * Offer to update from inside the editor when a new version is found (default: true).
-  * When off, the status-bar indicator only tells you an update exists.
-  * Needs `check_for_updates` and an install method that can self-update.
+  * Offer to update from inside the editor when a new version is found (default: false in
+  * this fork, which is built without self-update: updating would replace it with upstream).
   *
-  * Default: `true`
+  * Default: `false`
   */
   self_update?: boolean;
-  /**
-  * When on (default), `fresh` with no arguments reattaches to a single background
-  * editor with the workspace dock and your last workspace. When off, it opens a
-  * plain editor in the current directory; runs with files or flags are unaffected.
-  *
-  * Default: `true`
-  */
-  orchestrator_mode?: boolean;
   /**
   * Editor behavior settings (indentation, line numbers, wrapping, etc.)
   */
@@ -1262,6 +1253,16 @@ interface FreshConfig {
   */
   env?: FreshConfig.EnvConfig;
 }
+```
+
+### `FreshConfig.ChromeStyle`
+
+How the editor's chrome is laid out
+
+Default: `"fresh"`
+
+```typescript
+type ChromeStyle = "fresh" | "herdr";
 ```
 
 ### `FreshConfig.ClipboardConfig`
@@ -1398,6 +1399,14 @@ interface EditorConfig {
     * Default: `true`
     */
     show_menu_bar?: boolean;
+    /**
+    * Layout of the tab bar, status bar and file explorer. "fresh": Fresh's own. "herdr": like
+    * the herdr multiplexer (tab chips, close mark on hover, mode-bar status line).
+    * Default: "fresh"; the herdr edition ships "herdr".
+    *
+    * Default: `"fresh"`
+    */
+    chrome_style?: ChromeStyle;
     /**
     * Show a wave-animation screensaver after `screensaver_idle_minutes` with no
     * input. Any key or mouse move ends it. Default: false
