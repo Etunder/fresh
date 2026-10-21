@@ -36,20 +36,53 @@ export const DIACRITICS = [
 ].map((c) => String.fromCodePoint(c));
 export const PLACEHOLDER = String.fromCodePoint(0x10eeee);
 
-/** The terminal cell's size in pixels as measured: WR_CELL_PX=<w>x<h> (wr sets it), else what
- *  WezTerm publishes for this pane (its config writes it, following font-size and monitor
- *  changes; herdr's panes inherit WEZTERM_PANE); null when neither says. */
+const parseCell = (value: string): [number, number] | null => {
+  const m = /^(\d+)x(\d+)$/.exec(value.trim());
+  return m && +m[1] > 0 && +m[1] <= 512 && +m[2] > 0 && +m[2] <= 512 ? [+m[1], +m[2]] : null;
+};
+
+/** The folder WezTerm's config writes cell sizes to (one file per window and pane). */
+function cellsDir(): string | null {
+  const editor = getEditor();
+  const prefix = editor.getEnv("FRESH_WEZTERM_METRICS_PREFIX");
+  if (prefix) return editor.pathDirname(prefix);
+  const local = editor.getEnv("LOCALAPPDATA");
+  return local ? editor.pathJoin(local, "fresh", "wezterm-cells") : null;
+}
+
+/** The size the most recently written of those files says: kept by refreshCellPixels. */
+let newestCell: [number, number] | null = null;
+
+/** Re-reads the newest cell size any WezTerm window wrote. herdr outlives the WezTerm window it
+ *  was started from, so the window and pane in its environment can be long gone; the newest file
+ *  is the window in use (they share a font, as a rule). Called every half second. */
+export async function refreshCellPixels(): Promise<void> {
+  const editor = getEditor();
+  const dir = cellsDir();
+  if (!dir) return;
+  try {
+    const r = await editor.walkTree(dir, { maxDepth: 1, maxEntries: 500 });
+    let best: { path: string; mtime: number } | null = null;
+    for (const e of r.entries) {
+      if (e.kind === "file" && e.rel.endsWith(".txt") && (!best || e.mtime > best.mtime)) best = e;
+    }
+    newestCell = best ? parseCell(editor.readFile(best.path) ?? "") : null;
+  } catch {
+    // no such folder (WezTerm's config doesn't write one): the other sources, or the guess
+  }
+}
+
+/** The terminal cell's size in pixels as measured: WR_CELL_PX=<w>x<h> (wr sets it), else the
+ *  newest size WezTerm wrote (see refreshCellPixels), else this pane's own file; null when none
+ *  says. */
 export function measuredCellPixels(): [number, number] | null {
   const editor = getEditor();
-  const parse = (value: string): [number, number] | null => {
-    const m = /^(\d+)x(\d+)$/.exec(value.trim());
-    return m && +m[1] > 0 && +m[1] <= 512 && +m[2] > 0 && +m[2] <= 512 ? [+m[1], +m[2]] : null;
-  };
-  const override = parse(editor.getEnv("WR_CELL_PX") ?? "");
+  const override = parseCell(editor.getEnv("WR_CELL_PX") ?? "");
   if (override) return override;
+  if (newestCell) return newestCell;
   const prefix = editor.getEnv("FRESH_WEZTERM_METRICS_PREFIX");
   const pane = editor.getEnv("WEZTERM_PANE");
-  if (prefix && pane && /^\d+$/.test(pane)) return parse(editor.readFile(prefix + pane + ".txt") ?? "");
+  if (prefix && pane && /^\d+$/.test(pane)) return parseCell(editor.readFile(prefix + pane + ".txt") ?? "");
   return null;
 }
 

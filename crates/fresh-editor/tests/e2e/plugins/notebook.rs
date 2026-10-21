@@ -1296,3 +1296,65 @@ fn a_markdown_cell_is_edited_as_plain_text() {
     assert_eq!(cells[0]["source"], "># Report!\nmore");
     h.assert_no_plugin_errors();
 }
+
+/// A resize redraws the typeset markdown for the new width (nb asked again, narrower), and an
+/// image row never wraps onto the next line meanwhile.
+#[test]
+fn a_resize_typesets_markdown_again_at_the_new_width() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("doc.ipynb");
+    fs::write(
+        &nb_path,
+        NOTEBOOK.replace(
+            r##""source": ["# Report"]"##,
+            r##""source": ["# Typeset\n", "\n", "Some words here."]"##,
+        ),
+    )
+    .unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    // the notebook drawn (its cell box), then the cursor to the code cell
+    h.wait_until(|h| {
+        h.get_status_bar().starts_with(" NOTEBOOK ")
+            && h.screen_to_string().lines().any(|l| l.starts_with('▀'))
+    })
+    .unwrap();
+    h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
+    let placeholder = '\u{10EEEE}';
+    let rows = |h: &EditorTestHarness| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+    };
+    h.wait_until(|h| rows(h) == 3).unwrap();
+    let width = |p: &Path| -> u64 {
+        let req: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(p.join("md.json")).unwrap()).unwrap();
+        req["width_px"].as_u64().unwrap()
+    };
+    let wide = width(&project);
+
+    h.resize(60, 30).unwrap();
+    h.wait_until(|_| width(&project) < wide).unwrap();
+    h.wait_until(|h| rows(h) == 3).unwrap();
+    // no row of the picture runs into the next line: each holds placeholders only after the indent
+    for l in h
+        .screen_to_string()
+        .lines()
+        .filter(|l| l.contains(placeholder))
+    {
+        assert!(l.starts_with("   "), "{l}");
+    }
+    h.assert_no_plugin_errors();
+}

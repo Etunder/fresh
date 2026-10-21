@@ -23,7 +23,7 @@
 // a one-line placeholder instead. The cell size comes from WR_CELL_PX=<w>x<h> (wr sets it from
 // WezTerm), else herdr's 8x16.
 
-import { cellPixels, deleteImages, measuredCellPixels, DIACRITICS, imageFg, imageRow, pngSize, themeHex, uploadPng } from "./lib/kitty.ts";
+import { cellPixels, deleteImages, measuredCellPixels, refreshCellPixels, DIACRITICS, imageFg, imageRow, pngSize, themeHex, uploadPng } from "./lib/kitty.ts";
 
 const editor = getEditor();
 
@@ -938,19 +938,22 @@ const formulas = new Map<string, Image | "pending" | "failed">();
 
 /** The typeset image of a formula, or null while it's on its way (the notebook is redrawn when it
  *  comes) or if Typst can't make it out. */
-function formulaImage(nb: Notebook, latex: string, colorKey = "syntax.number"): Image | null {
+function formulaImage(nb: Notebook, latex: string, colorKey = "editor.fg"): Image | null {
   if (!IMAGES) return null;
+  // in the text's colour, as on the typeset page
   const color = themeHex(colorKey, colorKey === "syntax.number" ? "#ff9e64" : "#c0caf5");
-  const key = `${color} ${latex}`;
+  // the em as tall as the page's (0.8 of a row), drawn pixel for pixel when the cell's size is
+  // known (twice over when it's a guess)
+  const [, ch] = cellPixels();
+  const density = pageDensity();
+  const key = `${color} ${ch}@${density} ${latex}`;
   const known = formulas.get(key);
   if (known !== undefined) return typeof known === "string" ? null : known;
   formulas.set(key, "pending");
-  // rendered at twice the cell size, for HiDPI; the em as tall as a text row
-  const [, ch] = cellPixels();
   const size = 14;
-  void ask(nb, "math", { latex, color, size, scale: (2 * ch) / size }).then((r) => {
+  void ask(nb, "math", { latex, color, size, scale: (density * 0.8 * ch) / size }).then((r) => {
     const img = r.ok && typeof r.png === "string"
-      ? sendImage(r.png, Number(r.width), Number(r.height), 2)
+      ? sendImage(r.png, Number(r.width), Number(r.height), density)
       : null;
     formulas.set(key, img ?? "failed");
     if (img) void decorate(nb);
@@ -1240,7 +1243,7 @@ function outputLines(nb: Notebook, o: Output): OutLine[] {
         const img = snapshotImage(nb, o);
         if (img) {
           const fg = imageFg(img.id);
-          picture = Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+          picture = Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg, clip: true }));
         }
       }
       const body: OutLine[] = picture.length
@@ -1268,14 +1271,14 @@ function richLines(nb: Notebook, o: Output, data: Record<string, unknown>): OutL
     const img = uploadImage(o, join(data["image/png"]).replace(/\s+/g, ""));
     if (img) {
       const fg = imageFg(img.id);
-      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg, clip: true }));
     }
   } else if (image && IMAGES) {
     // JPEG, GIF, SVG: nb makes a PNG of it once; the placeholder line shows meanwhile
     const img = convertedImage(nb, o, image, join(data[image]));
     if (img) {
       const fg = imageFg(img.id);
-      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg, clip: true }));
     }
   }
   // a formula (sympy's text/latex: `$\displaystyle …$`), typeset like display math
@@ -1284,7 +1287,7 @@ function richLines(nb: Notebook, o: Output, data: Record<string, unknown>): OutL
     const img = latex ? formulaImage(nb, latex, "editor.fg") : null;
     if (img) {
       const fg = imageFg(img.id);
-      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg, clip: true }));
     }
     if (latex) return [{ text: latexToUnicode(latex), fg: "editor.fg" }];
   }
@@ -1332,7 +1335,7 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
       const fg = imageFg(img.id);
       const last = block.lines[block.lines.length - 1];
       for (let row = 0; row < img.rows; row++)
-        editor.addVirtualLine(buf, last, "    " + imageRow(img.cols, row), { fg }, false, NS_OUT, 10 + row);
+        editor.addVirtualLine(buf, last, "    " + imageRow(img.cols, row), { fg, clip: true }, false, NS_OUT, 10 + row);
     }
   };
   for (const lineStart of s.lineStarts) {
@@ -1500,7 +1503,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
         for (const img of page.tiles) {
           const fg = imageFg(img.id);
           for (let k = 0; k < img.rows; k++, row++)
-            editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg }, false, NS_OUT, 100 + row);
+            editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg, clip: true }, false, NS_OUT, 100 + row);
         }
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
       } else {
@@ -1678,8 +1681,23 @@ function showCopy(nb: Notebook, jsonBuffer: number): void {
   editor.openFile(nb.copy);
 }
 
+/** Every image placed at the old cell size (plots, formulas) forgotten, to be placed again: a cell
+ *  of another size shows them stretched. (Typeset pages are keyed by the cell size already.) */
+function forgetPlacedImages(): void {
+  const stale: number[] = [];
+  for (const img of images.values()) stale.push(img.id);
+  for (const f of formulas.values()) if (typeof f !== "string") stale.push(f.id);
+  images.clear();
+  formulas.clear();
+  converting.clear();
+  deleteImages(stale);
+}
+
+// The cell's size (the font, the monitor) and the pane's width (a resize, the explorer opening)
+// are watched: the images are drawn for both, and redrawn when either changes.
 let metricsWatching = false;
 let notebookCellPixels = "";
+let notebookWidth = 0;
 function watchCellPixels(): void {
   if (metricsWatching) return;
   metricsWatching = true;
@@ -1688,14 +1706,24 @@ function watchCellPixels(): void {
 registerHandler("notebook_cell_pixels", async () => {
   metricsWatching = false;
   if (!byCopy.size) return;
+  await refreshCellPixels();
   const pixels = cellPixels().join("x");
-  if (pixels !== notebookCellPixels) {
+  const width = editor.getViewport()?.width ?? 0;
+  if (pixels !== notebookCellPixels || width !== notebookWidth) {
+    if (notebookCellPixels && pixels !== notebookCellPixels) forgetPlacedImages();
     notebookCellPixels = pixels;
-    editor.debug(`notebook: terminal cell pixels ${pixels}`);
+    notebookWidth = width;
+    editor.debug(`notebook: terminal cell pixels ${pixels}, width ${width}`);
     for (const nb of byCopy.values()) if (nb.bufferId !== null) await decorate(nb);
   }
   watchCellPixels();
 });
+// a resize redraws at once, not at the next half second
+registerHandler("notebook_resized", () => {
+  const nb = active();
+  if (nb) void decorate(nb);
+});
+editor.on("resize", "notebook_resized");
 /** The working copy is open in `buffer`: set it up as the notebook's view. */
 function copyOpened(nb: Notebook, buffer: number): void {
   nb.bufferId = buffer;
