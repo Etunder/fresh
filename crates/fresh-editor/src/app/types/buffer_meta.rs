@@ -83,6 +83,18 @@ pub struct BufferMetadata {
 }
 
 impl BufferMetadata {
+    /// Notebook plugin working copies retain a Python file path but display
+    /// the original .ipynb tab label. Ordinary Python buffers don't have both.
+    pub fn is_notebook(&self) -> bool {
+        self.file_path()
+            .and_then(|p| p.file_name())
+            .is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(".ipynb.py"))
+            && self
+                .tab_label
+                .as_deref()
+                .is_some_and(|s| s.to_lowercase().ends_with(".ipynb"))
+    }
+
     /// Get the file path if this is a file-backed buffer
     pub fn file_path(&self) -> Option<&PathBuf> {
         match &self.kind {

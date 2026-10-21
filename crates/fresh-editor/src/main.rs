@@ -5,6 +5,8 @@
 #[cfg(all(windows, feature = "gui"))]
 use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 
+mod wezterm_graphics;
+
 use anyhow::{Context, Result as AnyhowResult};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use crossterm::event::{poll as event_poll, read as event_read};
@@ -6424,6 +6426,7 @@ where
 {
     use std::time::Instant;
 
+    let mut wezterm_graphics = wezterm_graphics::WeztermGraphics::from_env();
     const FRAME_DURATION: Duration = Duration::from_millis(16); // 60fps
     let mut last_render = Instant::now();
     let mut needs_render = true;
@@ -6513,11 +6516,25 @@ where
                 stdout().execute(crossterm::terminal::BeginSynchronizedUpdate)?;
                 // Plugin graphics (images uploaded before the placeholders that show them)
                 let graphics = editor.take_pending_escape_sequences();
+                let graphics = if let Some(adapter) = &mut wezterm_graphics {
+                    adapter.filter(&graphics)
+                } else {
+                    graphics
+                };
+                use std::io::Write;
                 if !graphics.is_empty() {
-                    use std::io::Write;
                     stdout().write_all(&graphics)?;
                 }
-                terminal.draw(|frame| editor.render(frame))?;
+                let mut placements = String::new();
+                terminal.draw(|frame| {
+                    editor.render(frame);
+                    if let Some(adapter) = &mut wezterm_graphics {
+                        placements = adapter.frame(frame.buffer_mut());
+                    }
+                })?;
+                if !placements.is_empty() {
+                    stdout().write_all(placements.as_bytes())?;
+                }
                 stdout().execute(crossterm::terminal::EndSynchronizedUpdate)?;
             }
             tracing::info!(target: "paste_timing", "render: {}ms (paste_pending={})", r0.elapsed().as_millis(), was_paste_pending);

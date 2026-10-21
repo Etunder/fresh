@@ -227,6 +227,9 @@ impl Editor {
             .active_window_mut()
             .action_to_events(Action::InsertChar(c))
         {
+            if self.refuse_notebook_edits(&events) {
+                return Ok(());
+            }
             if events.len() > 1 {
                 // Multi-cursor: use optimized bulk edit (O(n) instead of O(n²)).
                 // A cursor-only list — every cursor stepping over an existing
@@ -274,6 +277,9 @@ impl Editor {
         let action_description = format!("{:?}", action);
 
         if let Some(events) = self.active_window_mut().action_to_events(action) {
+            if self.refuse_notebook_edits(&events) {
+                return Ok(());
+            }
             // Refuse the action if it would mutate a read-only buffer.
             // Checking at the event level (rather than maintaining a hand-
             // written allowlist of "editing" actions) catches every action

@@ -44,6 +44,19 @@ const IMAGE_MAX_COLUMNS = editor.defineConfigInteger("imageMaxColumns", {
   description: "The widest an inline image gets, in columns (it keeps its aspect ratio).",
 });
 
+function rememberedFont(): string {
+  try { return JSON.parse(editor.readFile(editor.pathJoin(editor.getDataDir(), "notebooks", "font.json")) ?? "{}").font ?? ""; }
+  catch { return ""; }
+}
+let markdownFont = editor.defineConfigString("markdownFont", {
+  default: rememberedFont(),
+  description: "Typst font family for notebook prose/headings. Empty uses Typst's default; system fonts and NB_FONT_PATH are supported.",
+});
+const CODE_FONT = editor.defineConfigString("markdownCodeFont", {
+  default: "DejaVu Sans Mono",
+  description: "Typst font family for inline and fenced code in notebook markdown.",
+});
+
 const MAX_OUTPUT_LINES = 40;
 const NS_OUT = "notebook-out";
 const NS_RULE = "notebook-rule";
@@ -97,7 +110,17 @@ type Notebook = {
   edited?: boolean;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
   spans?: Span[];
+  redraw?: number;
 };
+
+/** File APIs canonicalize Windows paths; pathJoin uses forward slashes. Compare identities,
+ *  not their spelling, while keeping POSIX paths case-sensitive. */
+function pathKey(path: string): string {
+  let key = path.split(String.fromCharCode(92)).join("/");
+  if (key.startsWith("//?/UNC/")) key = "//" + key.slice(8);
+  else if (key.startsWith("//?/")) key = key.slice(4);
+  return /^[a-z]:/i.test(key) || key.startsWith("//") ? key.toLowerCase() : key;
+}
 
 const byCopy = new Map<string, Notebook>();
 const byIpynb = new Map<string, Notebook>();
@@ -448,7 +471,8 @@ function repoRoot(dir: string): string | null {
 
 /** The notebook a working copy belongs to, if `path` is one (from the note beside it). */
 function notebookOfCopy(path: string): string | null {
-  const inData = path.startsWith(editor.pathJoin(editor.getDataDir(), "notebooks"));
+  const key = pathKey(path);
+  const inData = key.startsWith(pathKey(editor.pathJoin(editor.getDataDir(), "notebooks")) + "/");
   const inRepo = /[\\/]\.git[\\/]fresh-notebooks[\\/]/.test(path);
   if (!(inData || inRepo) || !path.endsWith(".py")) return null;
   const note = editor.readFile(editor.pathJoin(editor.pathDirname(path), "notebook.txt"));
@@ -911,13 +935,13 @@ function dropStaleImages(): void {
 type MdLine = { md: number; buf: number };
 /** A markdown cell typeset by nb (Typst) as tiles of one long page: shown in place of the cell's
  *  source while the cursor is in another cell. `key` is what it was made from. */
-type Page = { key: string; state: "pending" | "failed" | "ready"; tiles: Image[]; rowPx: number };
+type Page = { key: string; markdown: string; state: "pending" | "failed" | "ready"; tiles: Image[]; rowPx: number; previous?: Page };
 const pages = new Map<Notebook, Map<string, Page>>();
 /** The tiles' images, by their hash (the same slice of page is sent once). */
 const pageTiles = new Map<string, Image>();
 const PAGE_TILE_ROWS = 8;
-/** Pixels drawn per terminal pixel, for HiDPI. */
-const PAGE_DENSITY = 2;
+/** WezTerm displays a native-pixel bitmap; avoid GPU text resampling. */
+const PAGE_DENSITY = (editor.getEnv("TERM_PROGRAM") ?? "").toLowerCase() === "wezterm" ? 1 : 2;
 const PAGE_SIZE_PT = 11;
 
 /** A markdown cell's text without its `# ` prefixes, and where each line of it is. */
@@ -941,13 +965,16 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
   const width = editor.getViewport()?.width ?? 80;
   // a page of text: as wide as the pane, up to a readable measure
   const cols = Math.max(20, Math.min(120, width - 4));
-  const key = `${cols} ${md}`;
+  const key = `${cols} ${cw}x${ch} ${markdownFont} ${CODE_FONT} ${md}`;
   let byCell = pages.get(nb);
   if (!byCell) pages.set(nb, (byCell = new Map()));
   const known = byCell.get(s.cell.id);
-  if (known?.key === key) return known.state === "ready" ? known : null;
+  if (known?.key === key) return known.state === "ready" ? known : known.state === "pending" ? known.previous ?? null : null;
   const rowPx = ch * PAGE_DENSITY;
-  const page: Page = { key, state: "pending", tiles: [], rowPx };
+  // Keep the last image during a layout-only refresh; edited text must not show an old image.
+  const previous = known && known.markdown === md
+    ? (known.state === "ready" ? known : known.previous) : undefined;
+  const page: Page = { key, markdown: md, state: "pending", tiles: [], rowPx, previous };
   byCell.set(s.cell.id, page);
   void ask(nb, "md", {
     id: `cell:${s.cell.id}`,
@@ -957,6 +984,8 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
     // the em about as tall as the terminal's own letters
     px_per_pt: (0.8 * rowPx) / PAGE_SIZE_PT,
     size_pt: PAGE_SIZE_PT,
+    font: markdownFont,
+    code_font: CODE_FONT,
     tile_px: PAGE_TILE_ROWS * rowPx,
     row_px: rowPx,
     theme: {
@@ -995,15 +1024,25 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
       page.tiles.push(img);
     }
     page.state = "ready";
+    page.previous = undefined;
     void decorate(nb);
   });
-  return null;
+  return previous ?? null;
+}
+
+/** Keep the editable layout until the first image is ready, avoiding a transient text preview. */
+function markdownSourceVisible(nb: Notebook, s: Span): boolean {
+  const page = pages.get(nb)?.get(s.cell.id);
+  return nb.cursorCell === s.cell.id || (!!IMAGES && page?.state === "pending" && !page.previous);
 }
 
 /** Deletes the tiles no page shows any more. */
 function dropStalePages(): void {
   const live = new Set<number>();
-  for (const byCell of pages.values()) for (const p of byCell.values()) p.tiles.forEach((t) => live.add(t.id));
+  for (const byCell of pages.values()) for (const p of byCell.values()) {
+    p.tiles.forEach((t) => live.add(t.id));
+    p.previous?.tiles.forEach((t) => live.add(t.id));
+  }
   const stale: number[] = [];
   for (const [hash, img] of pageTiles) {
     if (live.has(img.id)) continue;
@@ -1136,6 +1175,7 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
   // what hides a line's first characters, as anything anchored there hides with them; else on its own
   const margins = new Set(s.quotes && !editing ? s.lineStarts : []);
   const conceal = (start: number, end: number, with_: string) => {
+    if (editing) return;
     if (margins.delete(start)) with_ = "   " + with_;
     editor.addConceal(buf, NS_MD, start, end, with_, "unless-cursor-in", scope[0], scope[1]);
   };
@@ -1249,8 +1289,12 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
 async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   const buf = nb.bufferId;
   if (buf === null) return;
+  const redraw = (nb.redraw ?? 0) + 1;
+  nb.redraw = redraw;
   let text = await editor.getBufferText(buf);
+  if (nb.redraw !== redraw || nb.bufferId !== buf) return;
   if (fixQuotes(buf, text)) text = await editor.getBufferText(buf);
+  if (nb.redraw !== redraw || nb.bufferId !== buf) return;
   const spans = textToCells(text);
   editor.clearVirtualTextNamespace(buf, NS_OUT);
   editor.clearConcealNamespace(buf, NS_RULE);
@@ -1295,8 +1339,12 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     // a code cell's source on its own ground, the full width, like a notebook's cell box (the
     // rule above it and the outputs below stay on the editor's)
     // (a markdown cell's source too, while it's being edited)
+    const md = s.cell.kind === "markdown" && s.markerEnd > s.start && nb.cursorCell !== s.cell.id
+      ? cellMarkdown(s, lineAt) : null;
+    const page = md ? cellPage(nb, s, md.md) : null;
+    const sourceVisible = s.cell.kind === "markdown" && markdownSourceVisible(nb, s);
     const bodyStart = sourceStart(s);
-    const boxed = s.cell.kind === "code" || (s.cell.kind === "markdown" && nb.cursorCell === s.cell.id);
+    const boxed = s.cell.kind === "code" || sourceVisible;
     if (boxed && (s.lastEnd > bodyStart || (s.quotes && s.lineStarts.length))) {
       editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
@@ -1311,8 +1359,6 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     if (s.cell.kind === "markdown") {
       // typeset, unless the cursor is in it (its source then, to edit): the source folds away under
       // the `# %%` rule, the page's rows hang under that
-      const md = s.markerEnd > s.start && nb.cursorCell !== s.cell.id ? cellMarkdown(s, lineAt) : null;
-      const page = md ? cellPage(nb, s, md.md) : null;
       const last = s.quotes ? s.quotes.closeEnd : s.lastEnd;
       if (md && page && page.tiles.length && last + 1 <= at) {
         // (a fold always shows a mark after its first line: a pencil, the cell is there to edit)
@@ -1325,7 +1371,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
         }
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
       } else {
-        renderMarkdown(nb, buf, s, lineAt, nb.cursorCell === s.cell.id);
+        renderMarkdown(nb, buf, s, lineAt, sourceVisible);
         // the raw string's quotes out of sight: its `r"""` line (with nothing after the line above),
         // the `"""` at the end of the last
         const q = s.quotes;
@@ -1458,9 +1504,28 @@ function showCopy(nb: Notebook, jsonBuffer: number): void {
   editor.openFile(nb.copy);
 }
 
+let metricsWatching = false;
+let notebookCellPixels = "";
+function watchCellPixels(): void {
+  if (metricsWatching) return;
+  metricsWatching = true;
+  editor.setTimeout(500, "notebook_cell_pixels");
+}
+registerHandler("notebook_cell_pixels", async () => {
+  metricsWatching = false;
+  if (!byCopy.size) return;
+  const pixels = cellPixels().join("x");
+  if (pixels !== notebookCellPixels) {
+    notebookCellPixels = pixels;
+    editor.debug(`notebook: terminal cell pixels ${pixels}`);
+    for (const nb of byCopy.values()) if (nb.bufferId !== null) await decorate(nb);
+  }
+  watchCellPixels();
+});
 /** The working copy is open in `buffer`: set it up as the notebook's view. */
 function copyOpened(nb: Notebook, buffer: number): void {
   nb.bufferId = buffer;
+  watchCellPixels();
   // the tab is the notebook's, not its working copy's (name.ipynb.py)
   editor.setBufferTabLabel(buffer, nb.ipynb.split(/[\\/]/).pop() ?? nb.ipynb);
   editor.setLineNumbersDefault(buffer, false);
@@ -1473,7 +1538,7 @@ function copyOpened(nb: Notebook, buffer: number): void {
 }
 
 registerHandler("notebook_after_open", async (e: { path: string; buffer_id: number }) => {
-  const copyOf = byCopy.get(e.path);
+  const copyOf = byCopy.get(pathKey(e.path));
   if (copyOf) {
     copyOpened(copyOf, e.buffer_id);
     await decorate(copyOf);
@@ -1483,9 +1548,9 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
   // unsaved edits): attach it to its notebook as it is, and start the notebook's nb
   const restoredOf = notebookOfCopy(e.path);
   if (restoredOf) {
-    const nb = byIpynb.get(restoredOf) ?? start(restoredOf);
-    byIpynb.set(restoredOf, nb);
-    byCopy.set(e.path, nb);
+    const nb = byIpynb.get(pathKey(restoredOf)) ?? start(restoredOf);
+    byIpynb.set(pathKey(restoredOf), nb);
+    byCopy.set(pathKey(e.path), nb);
     nb.copy = e.path;
     const opened = await ask(nb, "open");
     if (opened.ok) {
@@ -1503,7 +1568,7 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
 /** A notebook's JSON is showing in `jsonBuffer` (opened, or previewed from the explorer): show its
  *  cells instead, starting its nb the first time. */
 async function openNotebook(path: string, jsonBuffer: number): Promise<void> {
-  const known = byIpynb.get(path);
+  const known = byIpynb.get(pathKey(path));
   if (known) {
     if (known.bufferId !== null) {
       // its working copy is open already: show that, drop the JSON view
@@ -1517,8 +1582,8 @@ async function openNotebook(path: string, jsonBuffer: number): Promise<void> {
   }
   editor.setStatus(`notebook: opening ${editor.pathBasename(path)}…`);
   const nb = start(path);
-  byIpynb.set(path, nb);
-  byCopy.set(nb.copy, nb);
+  byIpynb.set(pathKey(path), nb);
+  byCopy.set(pathKey(nb.copy), nb);
   const opened = await ask(nb, "open");
   if (!opened.ok) {
     editor.setStatus(`notebook: ${opened.message ?? "can't open"}`);
@@ -1545,7 +1610,7 @@ async function cellsWithIds(nb: Notebook): Promise<Span[]> {
 }
 
 registerHandler("notebook_after_save", async (e: { path: string }) => {
-  const nb = byCopy.get(e.path);
+  const nb = byCopy.get(pathKey(e.path));
   if (!nb || nb.bufferId === null) return;
   const spans = await cellsWithIds(nb);
   const r = await ask(nb, "save", { cells: spans.map((s) => s.cell) });
@@ -1557,8 +1622,8 @@ registerHandler("notebook_on_close", (e: { buffer_id: number }) => {
   for (const nb of byCopy.values()) {
     if (nb.bufferId !== e.buffer_id) continue;
     void ask(nb, "shutdown");
-    byCopy.delete(nb.copy);
-    byIpynb.delete(nb.ipynb);
+    byCopy.delete(pathKey(nb.copy));
+    byIpynb.delete(pathKey(nb.ipynb));
   }
 });
 editor.on("buffer_closed", "notebook_on_close");
@@ -1910,9 +1975,77 @@ editor.defineMode("notebook", [
   ["M-Enter", "notebook_run_advance"],
   ["C-Enter", "notebook_run_stay"],
   ["M-k", "notebook_docs"],
+  ["M-a", "notebook_insert_above"],
+  ["M-b", "notebook_insert_below"],
+  ["M-m", "notebook_insert_markdown_below"],
+  ["M-r", "notebook_run_all"],
+  ["F1", "notebook_shortcuts"],
   ["M-S-Up", "notebook_move_up"],
   ["M-S-Down", "notebook_move_down"],
 ], false);
+
+
+// A notebook action index with clickable buttons as well as direct shortcuts.
+registerHandler("notebook_shortcuts", () => {
+  const nb = active();
+  if (!nb || nb.bufferId === null) return;
+  editor.showActionPopup({
+    id: "notebook-actions", buffer_id: nb.bufferId, title: "Notebook shortcuts",
+    message: "Shift+Enter / Alt+Enter: run and advance\nCtrl+Enter: run and stay\nAlt+B: code below   Alt+A: code above\nAlt+M: markdown below   Alt+R: run all\nAlt+Shift+Up/Down: move cell   Ctrl+S: save\nF1: this index   Ctrl+P, Notebook: all actions\nClick markdown to edit; leave its cell to render it.",
+    actions: [
+      { id: "notebook_insert_below", label: "Code below (Alt+B)" },
+      { id: "notebook_insert_markdown_below", label: "Markdown below (Alt+M)" },
+      { id: "notebook_run_all", label: "Run all (Alt+R)" },
+      { id: "notebook_restart_run_all", label: "Restart and run all" },
+      { id: "notebook_select_font", label: "Choose markdown font" },
+      { id: "close", label: "Close" },
+    ],
+  });
+});
+editor.registerCommand("Notebook: Shortcuts and Actions", "Notebook shortcut index and clickable cell/run actions (F1)", "notebook_shortcuts", "notebook");
+registerHandler("notebook_action_clicked", (e: { popup_id: string; action_id: string }) => {
+  if (e.popup_id !== "notebook-actions") return;
+  const actions: Record<string, () => unknown> = {
+    notebook_insert_below: () => editCells((cells, i) => (cells.splice(i + 1, 0, blank()), i + 1)),
+    notebook_insert_markdown_below: () => editCells((cells, i) => (cells.splice(i + 1, 0, blank("markdown")), i + 1)),
+    notebook_run_all: async () => { const nb = active(); if (nb) await runCells(nb, await cellsWithIds(nb)); },
+    notebook_restart_run_all: () => editor.executeAction("notebook_restart_run_all"),
+    notebook_select_font: () => editor.executeAction("notebook_select_font"),
+  };
+  void actions[e.action_id]?.();
+});
+editor.on("action_popup_result", "notebook_action_clicked");
+
+registerHandler("notebook_select_font", async () => {
+  const nb = active();
+  if (!nb) return;
+  const r = await ask(nb, "fonts");
+  if (!r.ok || !Array.isArray(r.fonts)) { editor.setStatus(`notebook: ${r.message ?? "font listing failed"}`); return; }
+  editor.startPrompt("Markdown font: ", "notebook-font");
+  editor.setPromptSuggestions((r.fonts as string[]).map(name => ({id: name, text: name, value: name, description: name === markdownFont ? "current" : ""})), 0);
+});
+registerHandler("notebook_font_chosen", async (e: { prompt_type: string; input: string }) => {
+  if (e.prompt_type !== "notebook-font") return;
+  const nb = active();
+  if (!nb) return;
+  const font = e.input.trim();
+  const probe = await ask(nb, "md", { id: "font-check", text: "Aa", font, code_font: CODE_FONT });
+  if (!probe.ok) { editor.setStatus(`notebook: ${probe.message}`); return; }
+  markdownFont = font;
+  const folder = editor.pathJoin(editor.getDataDir(), "notebooks");
+  editor.createDir(folder);
+  editor.writeFile(editor.pathJoin(folder, "font.json"), JSON.stringify({ font }));
+  for (const book of byCopy.values()) await decorate(book);
+  editor.setStatus(`notebook: markdown font ${font || "Typst default"}`);
+});
+editor.on("prompt_confirmed", "notebook_font_chosen");
+editor.registerCommand("Notebook: Select Markdown Font", "Choose an installed font for notebook prose/headings (remembered)", "notebook_select_font", "notebook");
+for (const [label, action] of [
+  ["Notebook: Code Cell Below (Alt+B)", "notebook_insert_below"],
+  ["Notebook: Markdown Cell Below (Alt+M)", "notebook_insert_markdown_below"],
+  ["Notebook: Run All (Alt+R)", "notebook_run_all"],
+  ["Notebook: Shortcuts and Actions (F1)", "notebook_shortcuts"],
+]) editor.addMenuItem({ menu: "Edit", label, action, when: "notebook" });
 
 function followMode(): void {
   const nb = active();

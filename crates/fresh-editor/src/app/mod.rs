@@ -59,6 +59,8 @@ mod mouse_input;
 #[cfg(feature = "web")]
 pub(crate) mod native_panels;
 mod navigation;
+mod notebook_edit;
+mod notebook_edit_policy;
 mod on_save_actions;
 mod orchestrator_persistence;
 mod overlay;

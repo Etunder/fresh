@@ -223,8 +223,7 @@ pub(crate) fn paint_leaf(
     // blank.
     let active_buf_is_terminal = buffer_metadata
         .get(&buffer_id)
-        .and_then(|m| m.virtual_mode())
-        .is_some_and(|m| m == "terminal");
+        .is_some_and(|m| m.virtual_mode() == Some("terminal") || m.is_notebook());
     let split_show_tilde = show_tilde
         && !split_view_states
             .as_deref()
