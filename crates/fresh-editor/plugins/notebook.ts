@@ -23,7 +23,7 @@
 // a one-line placeholder instead. The cell size comes from WR_CELL_PX=<w>x<h> (wr sets it from
 // WezTerm), else herdr's 8x16.
 
-import { cellPixels, deleteImages, DIACRITICS, imageFg, imageRow, pngSize, themeHex, uploadPng } from "./lib/kitty.ts";
+import { cellPixels, deleteImages, measuredCellPixels, DIACRITICS, imageFg, imageRow, pngSize, themeHex, uploadPng } from "./lib/kitty.ts";
 
 const editor = getEditor();
 
@@ -48,12 +48,13 @@ function rememberedFont(): string {
   try { return JSON.parse(editor.readFile(editor.pathJoin(editor.getDataDir(), "notebooks", "font.json")) ?? "{}").font ?? ""; }
   catch { return ""; }
 }
+// JetBrains Mono comes with nb: typeset markdown in the terminal's own font
 let markdownFont = editor.defineConfigString("markdownFont", {
-  default: rememberedFont(),
-  description: "Typst font family for notebook prose/headings. Empty uses Typst's default; system fonts and NB_FONT_PATH are supported.",
+  default: rememberedFont() || "JetBrains Mono",
+  description: "Typst font family for notebook prose/headings (JetBrains Mono comes with nb). Empty uses Typst's default; system fonts and NB_FONT_PATH are supported.",
 });
 const CODE_FONT = editor.defineConfigString("markdownCodeFont", {
-  default: "DejaVu Sans Mono",
+  default: "JetBrains Mono",
   description: "Typst font family for inline and fenced code in notebook markdown.",
 });
 
@@ -109,6 +110,9 @@ type Notebook = {
   /** The text changed since the last redraw (its spans are out of date). */
   edited?: boolean;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
+  /** The rows under a cell's last line (by its line number) that open its outputs in the browser:
+   *  which of the virtual rows below the line they are. */
+  links?: Map<number, { cell: string; rows: Set<number> }>;
   spans?: Span[];
   redraw?: number;
 };
@@ -889,6 +893,45 @@ function convertedImage(nb: Notebook, o: Output, mime: string, data: string): Im
   return null;
 }
 
+const SNAPSHOTS = editor.defineConfigBoolean("interactiveSnapshots", {
+  default: true,
+  description: "Show interactive outputs (Plotly, Altair, Bokeh, maps) as a picture, taken by a headless Edge/Chrome; the picture opens the live one in the browser when clicked.",
+});
+
+/** A picture of an interactive output, taken by nb with a headless browser (Edge, on Windows): the
+ *  image once it's there, else null (pending: the summary line shows meanwhile; or failed: for
+ *  good, no browser, say). The scripts earlier cells output go in first (Bokeh's loader). */
+function snapshotImage(nb: Notebook, o: Output): Image | null {
+  const known = images.get(o);
+  if (known) return known;
+  if (!IMAGES || !SNAPSHOTS || converting.has(o)) return null;
+  converting.set(o, "pending");
+  const prelude: string[] = [];
+  for (const s of nb.spans ?? []) {
+    for (const out of nb.runs.get(s.cell.id)?.outputs ?? []) {
+      if (out === o) break;
+      const js = ((out.data ?? {}) as Record<string, unknown>)["application/javascript"];
+      if (js !== undefined) prelude.push(Array.isArray(js) ? js.join("") : String(js));
+    }
+  }
+  // as wide as it will be shown, pixel for pixel
+  const [cw] = cellPixels();
+  const pane = editor.getViewport()?.width ?? 80;
+  const cols = Math.max(20, Math.min(IMAGE_MAX_COLUMNS, pane - 4));
+  void ask(nb, "snapshot", { output: o, prelude, width_px: cols * cw }).then((r) => {
+    const img = r.ok && typeof r.png === "string" ? sendImage(r.png, Number(r.width), Number(r.height)) : null;
+    if (!img) {
+      converting.set(o, "failed");
+      if (!r.ok) editor.debug(`notebook: snapshot: ${r.message}`);
+      return;
+    }
+    converting.delete(o);
+    images.set(o, img);
+    void decorate(nb);
+  });
+  return null;
+}
+
 /** Display math typeset by nb (Typst), by formula and colour: the image once it's there, or
  *  "pending" / "failed" (the Unicode text shows meanwhile, or for good). Kept for the session. */
 const formulas = new Map<string, Image | "pending" | "failed">();
@@ -940,8 +983,9 @@ const pages = new Map<Notebook, Map<string, Page>>();
 /** The tiles' images, by their hash (the same slice of page is sent once). */
 const pageTiles = new Map<string, Image>();
 const PAGE_TILE_ROWS = 8;
-/** WezTerm displays a native-pixel bitmap; avoid GPU text resampling. */
-const PAGE_DENSITY = (editor.getEnv("TERM_PROGRAM") ?? "").toLowerCase() === "wezterm" ? 1 : 2;
+/** Pixels drawn per terminal pixel: one when the cell's real size is known (the page is shown
+ *  pixel for pixel, the sharpest), else two, for a guess that may be too small. */
+const pageDensity = () => (measuredCellPixels() ? 1 : 2);
 const PAGE_SIZE_PT = 11;
 
 /** A markdown cell's text without its `# ` prefixes, and where each line of it is. */
@@ -965,12 +1009,13 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
   const width = editor.getViewport()?.width ?? 80;
   // a page of text: as wide as the pane, up to a readable measure
   const cols = Math.max(20, Math.min(120, width - 4));
-  const key = `${cols} ${cw}x${ch} ${markdownFont} ${CODE_FONT} ${md}`;
+  const density = pageDensity();
+  const key = `${cols} ${cw}x${ch}@${density} ${markdownFont} ${CODE_FONT} ${md}`;
   let byCell = pages.get(nb);
   if (!byCell) pages.set(nb, (byCell = new Map()));
   const known = byCell.get(s.cell.id);
   if (known?.key === key) return known.state === "ready" ? known : known.state === "pending" ? known.previous ?? null : null;
-  const rowPx = ch * PAGE_DENSITY;
+  const rowPx = ch * density;
   // Keep the last image during a layout-only refresh; edited text must not show an old image.
   const previous = known && known.markdown === md
     ? (known.state === "ready" ? known : known.previous) : undefined;
@@ -980,7 +1025,7 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
     id: `cell:${s.cell.id}`,
     text: md,
     dir: editor.pathDirname(nb.ipynb),
-    width_px: cols * cw * PAGE_DENSITY,
+    width_px: cols * cw * density,
     // the em about as tall as the terminal's own letters
     px_per_pt: (0.8 * rowPx) / PAGE_SIZE_PT,
     size_pt: PAGE_SIZE_PT,
@@ -1055,7 +1100,59 @@ function dropStalePages(): void {
 // ── drawing ──────────────────────────────────────────────────────────
 
 /** A line drawn under a cell: text in a theme colour, or one row of an image. */
-type OutLine = { text: string; fg: string | [number, number, number]; clip?: boolean; spans?: Span8[] };
+/** `open`: the line opens the cell's outputs in the browser when clicked. */
+type OutLine = { text: string; fg: string | [number, number, number]; clip?: boolean; spans?: Span8[]; open?: boolean };
+
+/** Whether an output has what only a browser shows (nb's interactive.rs decides the same way):
+ *  a Plotly, Vega or Bokeh figure, a widget, or HTML with scripts (maps, many charts). */
+export function isInteractive(data: Record<string, unknown>): boolean {
+  const kinds = Object.keys(data);
+  if (kinds.some((k) => k === "application/vnd.plotly.v1+json" || k.startsWith("application/vnd.vegalite.")
+    || k.startsWith("application/vnd.vega.") || k.startsWith("application/vnd.bokehjs_exec.")
+    || k === "application/vnd.jupyter.widget-view+json" || k === "application/javascript")) return true;
+  const html = data["text/html"];
+  const text = (Array.isArray(html) ? html.join("") : String(html ?? "")).toLowerCase();
+  return text.includes("<script") || text.includes("<iframe");
+}
+
+/** One line saying what an interactive output is: its library, kinds of chart and title. */
+export function interactiveSummary(data: Record<string, unknown>): string {
+  const json = (v: unknown): Record<string, unknown> => {
+    if (typeof v === "string") { try { return JSON.parse(v); } catch { return {}; } }
+    return (v ?? {}) as Record<string, unknown>;
+  };
+  const title = (t: unknown): string =>
+    typeof t === "string" ? t : typeof (t as { text?: unknown })?.text === "string" ? (t as { text: string }).text : "";
+  const named = (what: string, kinds: string[], t: string) =>
+    [what, kinds.length ? kinds.join(", ") : "", t ? `“${t}”` : ""].filter(Boolean).join(" · ");
+  if (data["application/vnd.jupyter.widget-view+json"] !== undefined) {
+    const plain = String(Array.isArray(data["text/plain"]) ? (data["text/plain"] as string[]).join("") : data["text/plain"] ?? "");
+    return named("Widget", [], plain.split("\n")[0]) + " (needs Jupyter: it talks to the kernel live)";
+  }
+  if (data["application/vnd.plotly.v1+json"] !== undefined) {
+    const fig = json(data["application/vnd.plotly.v1+json"]);
+    const traces = Array.isArray(fig.data) ? (fig.data as { type?: string }[]) : [];
+    const kinds = [...new Set(traces.map((t) => t.type ?? "scatter"))];
+    const layout = (fig.layout ?? {}) as { title?: unknown };
+    return named(`Plotly figure, ${traces.length} trace${traces.length === 1 ? "" : "s"}`, kinds, title(layout.title));
+  }
+  const vega = Object.keys(data).find((k) => k.startsWith("application/vnd.vegalite.") || k.startsWith("application/vnd.vega."));
+  if (vega) {
+    const spec = json(data[vega]);
+    const marks: string[] = [];
+    const walk = (v: Record<string, unknown>) => {
+      const m = v.mark;
+      if (typeof m === "string") marks.push(m);
+      else if (m && typeof (m as { type?: unknown }).type === "string") marks.push((m as { type: string }).type);
+      for (const k of ["layer", "concat", "hconcat", "vconcat"]) if (Array.isArray(v[k])) (v[k] as Record<string, unknown>[]).forEach(walk);
+      if (v.spec && typeof v.spec === "object") walk(v.spec as Record<string, unknown>);
+    };
+    walk(spec);
+    return named(vega.includes("vegalite") ? "Vega-Lite chart" : "Vega chart", [...new Set(marks)], title(spec.title));
+  }
+  if (Object.keys(data).some((k) => k.startsWith("application/vnd.bokehjs_exec."))) return "Bokeh plot";
+  return "Web output (HTML with scripts)";
+}
 
 /** The cells of an HTML table's rows (`<th>`/`<td>`, tags inside stripped, entities decoded, a
  *  `colspan` as that many cells) and the text after the table (pandas' "5 rows × 3 columns"); null
@@ -1130,40 +1227,72 @@ function outputLines(nb: Notebook, o: Output): OutLine[] {
     case "execute_result":
     case "display_data": {
       const data = (o.data ?? {}) as Record<string, unknown>;
-      const kinds = Object.keys(data).filter((k) => k !== "text/plain");
-      const image = kinds.find((k) => k.startsWith("image/"));
-      if (data["image/png"] && IMAGES) {
-        const img = uploadImage(o, join(data["image/png"]).replace(/\s+/g, ""));
+      if (!isInteractive(data)) return richLines(nb, o, data);
+      // a script and nothing to see (a library's loader): nothing shows, as in Jupyter
+      const plain = data["text/plain"];
+      const seen = Object.keys(data).filter((k) => k !== "application/javascript" && !(k === "text/plain" && !String(Array.isArray(plain) ? plain.join("") : plain ?? "").trim()));
+      if (!seen.length) return [];
+      // a chart or page the terminal can't run: its picture if it came with one, else what it is;
+      // then the line that opens it in the browser
+      let picture = Object.keys(data).some((k) => k.startsWith("image/")) ? richLines(nb, o, data) : [];
+      // else a picture of it drawn by a browser (not of a widget: it can't draw without its kernel)
+      if (!picture.length && data["application/vnd.jupyter.widget-view+json"] === undefined) {
+        const img = snapshotImage(nb, o);
         if (img) {
           const fg = imageFg(img.id);
-          return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
-        }
-      } else if (image && IMAGES) {
-        // JPEG, GIF, SVG: nb makes a PNG of it once; the placeholder line shows meanwhile
-        const img = convertedImage(nb, o, image, join(data[image]));
-        if (img) {
-          const fg = imageFg(img.id);
-          return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+          picture = Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
         }
       }
-      // a formula (sympy's text/latex: `$\displaystyle …$`), typeset like display math
-      if (data["text/latex"] !== undefined && !image) {
-        const latex = join(data["text/latex"]).trim().replace(/^\$\$?|\$\$?$/g, "").replace(/^\\displaystyle\s*/, "").trim();
-        const img = latex ? formulaImage(nb, latex, "editor.fg") : null;
-        if (img) {
-          const fg = imageFg(img.id);
-          return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
-        }
-        if (latex) return [{ text: latexToUnicode(latex), fg: "editor.fg" }];
-      }
-      const html = data["text/html"] !== undefined ? htmlTable(join(data["text/html"])) : null;
-      if (html) return tableLines(html);
-      if (image) return [{ text: `▣ ${image}${data["text/plain"] ? "  " + join(data["text/plain"]).split("\n")[0] : ""}`, fg: "syntax.type" }];
-      if (data["text/plain"] !== undefined) return lines(join(data["text/plain"]), "editor.fg");
-      return [{ text: `[${kinds.join(", ")}]`, fg: "editor.line_number_fg" }];
+      const body: OutLine[] = picture.length
+        ? picture
+        : [{ text: `◆ ${interactiveSummary(data)}`, fg: "syntax.type" }];
+      return [...body.map((l) => ({ ...l, open: true })),
+        { text: "↗ open interactive in the browser (click, or Alt+O)", fg: "ui.tab_active_bg", open: true }];
     }
   }
   return [];
+}
+
+/** A display output's lines from its richest form the terminal shows: an image, a formula, a
+ *  table, its text. */
+function richLines(nb: Notebook, o: Output, data: Record<string, unknown>): OutLine[] {
+  const join = (v: unknown) => (Array.isArray(v) ? v.join("") : String(v ?? ""));
+  const lines = (s: string, fg: string): OutLine[] =>
+    s.replace(/\n$/, "").split("\n").map((raw) => {
+      const { text, spans } = ansiLine(raw);
+      return { text, fg, spans };
+    });
+  const kinds = Object.keys(data).filter((k) => k !== "text/plain");
+  const image = kinds.find((k) => k.startsWith("image/"));
+  if (data["image/png"] && IMAGES) {
+    const img = uploadImage(o, join(data["image/png"]).replace(/\s+/g, ""));
+    if (img) {
+      const fg = imageFg(img.id);
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+    }
+  } else if (image && IMAGES) {
+    // JPEG, GIF, SVG: nb makes a PNG of it once; the placeholder line shows meanwhile
+    const img = convertedImage(nb, o, image, join(data[image]));
+    if (img) {
+      const fg = imageFg(img.id);
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+    }
+  }
+  // a formula (sympy's text/latex: `$\displaystyle …$`), typeset like display math
+  if (data["text/latex"] !== undefined && !image) {
+    const latex = join(data["text/latex"]).trim().replace(/^\$\$?|\$\$?$/g, "").replace(/^\\displaystyle\s*/, "").trim();
+    const img = latex ? formulaImage(nb, latex, "editor.fg") : null;
+    if (img) {
+      const fg = imageFg(img.id);
+      return Array.from({ length: img.rows }, (_, row) => ({ text: imageRow(img.cols, row), fg }));
+    }
+    if (latex) return [{ text: latexToUnicode(latex), fg: "editor.fg" }];
+  }
+  const html = data["text/html"] !== undefined ? htmlTable(join(data["text/html"])) : null;
+  if (html) return tableLines(html);
+  if (image) return [{ text: `▣ ${image}${data["text/plain"] ? "  " + join(data["text/plain"]).split("\n")[0] : ""}`, fg: "syntax.type" }];
+  if (data["text/plain"] !== undefined) return lines(join(data["text/plain"]), "editor.fg");
+  return [{ text: `[${kinds.join(", ")}]`, fg: "editor.line_number_fg" }];
 }
 
 /** A markdown cell as rendered text while the cursor is elsewhere (the `# ` prefixes, `#` heading
@@ -1309,6 +1438,8 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   nb.cursorCell = markdownCellAt(spans, cursor);
   const typeset = new Map<number, { cell: string; lines: MdLine[]; rowPx: number }>();
   nb.typeset = typeset;
+  const links = new Map<number, { cell: string; rows: Set<number> }>();
+  nb.links = links;
   // the line number of each line start, for the typeset cells' markers
   const lineNo = new Map<number, number>();
   // each line's text by its start (bytes), for the markdown cells
@@ -1345,7 +1476,9 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     const sourceVisible = s.cell.kind === "markdown" && markdownSourceVisible(nb, s);
     const bodyStart = sourceStart(s);
     const boxed = s.cell.kind === "code" || sourceVisible;
-    if (boxed && (s.lastEnd > bodyStart || (s.quotes && s.lineStarts.length))) {
+    // (the box's bottom band is the first row under the cell's last line, before any output)
+    const banded = boxed && (s.lastEnd > bodyStart || (!!s.quotes && s.lineStarts.length > 0));
+    if (banded) {
       editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
       // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
@@ -1393,13 +1526,15 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     let shown = 0;
     let more = 0;
     const out: OutLine[] = r.outputs.flatMap((o) => outputLines(nb, o)).filter((l) => {
-      if (Array.isArray(l.fg) && !l.spans) return true;
+      if ((Array.isArray(l.fg) && !l.spans) || l.open) return true;
       if (r.expanded || shown < MAX_OUTPUT_LINES) return ++shown > 0;
       more++;
       return false;
     });
     if (more) out.push({ text: `… ${more} more lines (Notebook: Expand Output)`, fg: "editor.line_number_fg" });
     if (!out.length) return;
+    const opens = new Set(out.flatMap((l, j) => (l.open ? [j + (banded ? 1 : 0)] : [])));
+    if (opens.size) links.set(lineNo.get(s.lastLine) ?? -1, { cell: s.cell.id, rows: opens });
     out.forEach((l, j) =>
       // three columns in, level with the cell's code (its two-column margin plus the inlay space)
       editor.addVirtualLine(buf, textStart(s.lastLine), "   " + l.text, {
@@ -1478,12 +1613,19 @@ editor.on("cursor_moved", "notebook_cursor_moved");
 registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   if (e.button !== "left" || e.virtual_row === null || e.buffer_row === null) return;
   const nb = [...byCopy.values()].find((n) => n.bufferId === e.buffer_id);
+  // a click on an interactive output: open it in the browser
+  const link = nb?.links?.get(e.buffer_row);
+  if (nb && link?.rows.has(e.virtual_row)) {
+    await openInteractive(nb, link.cell);
+    return;
+  }
   const hit = nb?.typeset?.get(e.buffer_row);
   if (!nb || !hit) return;
-  const [cw] = cellPixels();
+  // (the page's pixels per terminal pixel: rowPx is a row's height in its pixels)
+  const [cw, ch] = cellPixels();
   const r = await ask(nb, "mdjump", {
     id: `cell:${hit.cell}`,
-    x: Math.max(0, (e.virtual_col ?? 3) - 3 + 0.5) * cw * PAGE_DENSITY,
+    x: (Math.max(0, (e.virtual_col ?? 3) - 3 + 0.5) * cw * hit.rowPx) / ch,
     y: (e.virtual_row + 0.5) * hit.rowPx,
   });
   const offset = typeof r.offset === "number" ? r.offset : 0;
@@ -1493,6 +1635,38 @@ registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   editor.setBufferCursor(nb.bufferId, line.buf + offset - line.md);
 });
 editor.on("mouse_click", "notebook_page_click");
+
+/** Opens a code cell's outputs in the browser, as a page nb makes (with the scripts earlier cells
+ *  output: Bokeh's loader, for one). */
+async function openInteractive(nb: Notebook, cellId: string): Promise<void> {
+  const spans = nb.spans ?? [];
+  const i = spans.findIndex((s) => s.cell.id === cellId);
+  const outputs = nb.runs.get(cellId)?.outputs ?? [];
+  if (i < 0 || !outputs.length) {
+    editor.setStatus("notebook: this cell has no output to open");
+    return;
+  }
+  const prelude: string[] = [];
+  for (const s of spans.slice(0, i)) {
+    for (const o of nb.runs.get(s.cell.id)?.outputs ?? []) {
+      const js = ((o.data ?? {}) as Record<string, unknown>)["application/javascript"];
+      if (js !== undefined) prelude.push(Array.isArray(js) ? js.join("") : String(js));
+    }
+  }
+  const title = `${editor.pathBasename(nb.ipynb)} · cell ${i + 1}`;
+  const r = await ask(nb, "interactive", { title, outputs, prelude });
+  editor.setStatus(r.ok ? `notebook: ${title} opened in your browser` : `notebook: ${r.message ?? "can't open it"}`);
+}
+
+registerHandler("notebook_open_interactive", async () => {
+  const nb = active();
+  if (!nb) return;
+  const spans = await cellsWithIds(nb);
+  const cursor = editor.getCursorPosition();
+  const s = spans.find((s, k) => cursor >= s.start && (k === spans.length - 1 || cursor < spans[k + 1].start));
+  if (s) await openInteractive(nb, s.cell.id);
+});
+editor.registerCommand("Notebook: Open Output in Browser", "This cell's outputs as a web page: interactive charts (Plotly, Altair, Bokeh), maps (Alt+O)", "notebook_open_interactive", "notebook");
 
 // ── opening, saving, closing ─────────────────────────────────────────
 
@@ -1979,6 +2153,7 @@ editor.defineMode("notebook", [
   ["M-b", "notebook_insert_below"],
   ["M-m", "notebook_insert_markdown_below"],
   ["M-r", "notebook_run_all"],
+  ["M-o", "notebook_open_interactive"],
   ["F1", "notebook_shortcuts"],
   ["M-S-Up", "notebook_move_up"],
   ["M-S-Down", "notebook_move_down"],
@@ -1991,11 +2166,12 @@ registerHandler("notebook_shortcuts", () => {
   if (!nb || nb.bufferId === null) return;
   editor.showActionPopup({
     id: "notebook-actions", buffer_id: nb.bufferId, title: "Notebook shortcuts",
-    message: "Shift+Enter / Alt+Enter: run and advance\nCtrl+Enter: run and stay\nAlt+B: code below   Alt+A: code above\nAlt+M: markdown below   Alt+R: run all\nAlt+Shift+Up/Down: move cell   Ctrl+S: save\nF1: this index   Ctrl+P, Notebook: all actions\nClick markdown to edit; leave its cell to render it.",
+    message: "Shift+Enter / Alt+Enter: run and advance\nCtrl+Enter: run and stay\nAlt+B: code below   Alt+A: code above\nAlt+M: markdown below   Alt+R: run all\nAlt+O: open this cell's output in the browser (interactive charts)\nAlt+Shift+Up/Down: move cell   Ctrl+S: save\nF1: this index   Ctrl+P, Notebook: all actions\nClick markdown to edit; leave its cell to render it.",
     actions: [
       { id: "notebook_insert_below", label: "Code below (Alt+B)" },
       { id: "notebook_insert_markdown_below", label: "Markdown below (Alt+M)" },
       { id: "notebook_run_all", label: "Run all (Alt+R)" },
+      { id: "notebook_open_interactive", label: "Open output in browser (Alt+O)" },
       { id: "notebook_restart_run_all", label: "Restart and run all" },
       { id: "notebook_select_font", label: "Choose markdown font" },
       { id: "close", label: "Close" },
@@ -2004,15 +2180,10 @@ registerHandler("notebook_shortcuts", () => {
 });
 editor.registerCommand("Notebook: Shortcuts and Actions", "Notebook shortcut index and clickable cell/run actions (F1)", "notebook_shortcuts", "notebook");
 registerHandler("notebook_action_clicked", (e: { popup_id: string; action_id: string }) => {
-  if (e.popup_id !== "notebook-actions") return;
-  const actions: Record<string, () => unknown> = {
-    notebook_insert_below: () => editCells((cells, i) => (cells.splice(i + 1, 0, blank()), i + 1)),
-    notebook_insert_markdown_below: () => editCells((cells, i) => (cells.splice(i + 1, 0, blank("markdown")), i + 1)),
-    notebook_run_all: async () => { const nb = active(); if (nb) await runCells(nb, await cellsWithIds(nb)); },
-    notebook_restart_run_all: () => editor.executeAction("notebook_restart_run_all"),
-    notebook_select_font: () => editor.executeAction("notebook_select_font"),
-  };
-  void actions[e.action_id]?.();
+  if (!e.popup_id.endsWith("notebook-actions") || e.action_id === "close") return;
+  // each button is one of this plugin's handlers (registerHandler puts them on globalThis)
+  const handler = (globalThis as Record<string, unknown>)[e.action_id];
+  if (typeof handler === "function") void handler();
 });
 editor.on("action_popup_result", "notebook_action_clicked");
 

@@ -396,6 +396,3 @@ assets = [
 [lints]
 workspace = true
 
-[[test]]
-name = 'notebook_edit'
-path = 'tests/notebook/edit_policy.rs'

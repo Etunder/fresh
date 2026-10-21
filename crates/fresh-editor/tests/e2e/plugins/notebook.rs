@@ -61,7 +61,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 body["cells"] = [{"id": c["id"], "kind": c["cell_type"], "source": "".join(c["source"])}
                                  for c in nb["cells"]]
                 body["language"] = "python"
-                body["runs"] = {}
+                # the outputs saved in the notebook, as nb gives them
+                body["runs"] = {c["id"]: {"execution_count": c.get("execution_count"), "outputs": c["outputs"]}
+                                for c in nb["cells"] if c.get("outputs")}
             elif url.path == "/input":
                 cell = waiting.pop()
                 emit({"event": "output", "cell": cell,
@@ -93,6 +95,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     for text in pieces:
                         emit({"event": "output", "cell": req["cell"],
                               "output": {"output_type": "stream", "name": "stdout", "text": text}})
+                elif req["code"].startswith("fig"):
+                    fig = {"data": [{"type": "scatter", "y": [1, 3]}, {"type": "bar", "y": [2, 1]}],
+                           "layout": {"title": {"text": "Returns"}}}
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "display_data", "metadata": {},
+                                     "data": {"application/vnd.plotly.v1+json": fig, "text/html": "<div>plot</div>",
+                                              "text/plain": "Figure({...})"}}})
                 elif req["code"].startswith("table"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "execute_result", "execution_count": count[0], "metadata": {},
@@ -154,6 +163,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif url.path == "/clear":
                 with open(os.path.join(os.path.dirname(notebook), "cleared.json"), "w") as f:
                     json.dump(req, f)
+            elif url.path == "/snapshot":
+                with open(os.path.join(os.path.dirname(notebook), "snapshot.json"), "w") as f:
+                    json.dump(req, f)
+                body.update({"png": PNG, "width": 80, "height": 48})
+            elif url.path == "/interactive":
+                with open(os.path.join(os.path.dirname(notebook), "interactive.json"), "w") as f:
+                    json.dump(req, f)
+                body["path"] = "/tmp/page.html"
             elif url.path == "/interrupt":
                 open(os.path.join(os.path.dirname(notebook), "interrupted"), "w").close()
             elif url.path == "/save":
@@ -579,6 +596,93 @@ fn an_html_table_is_drawn_as_a_text_table() {
         .map(|r| r.to_string()),
         "{screen}"
     );
+    h.assert_no_plugin_errors();
+}
+
+const FIGURE_NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "setup", "metadata": {}, "outputs": [
+    {"output_type": "display_data", "metadata": {}, "data": {"application/javascript": "window.loaded = 1;", "text/plain": ""}}],
+   "source": ["setup()"]},
+  {"cell_type": "code", "execution_count": null, "id": "chart", "metadata": {}, "outputs": [],
+   "source": ["fig()"]}
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// An interactive chart (a Plotly figure here) says what it is, and a click on it or Alt+O opens
+/// the cell's outputs in the browser through nb, with the scripts earlier cells output.
+#[test]
+fn an_interactive_output_opens_in_the_browser() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("charts.ipynb");
+    fs::write(&nb_path, FIGURE_NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    // run the chart cell
+    h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    // what it is while its picture is taken; then the picture (the stand-in's 80x48 PNG: 3 rows)
+    let placeholder = '\u{10EEEE}';
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.lines().filter(|l| l.contains(placeholder)).count() == 3
+            && s.contains("open interactive in the browser")
+    })
+    .unwrap();
+    let shot: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join("snapshot.json")).unwrap()).unwrap();
+    assert_eq!(
+        shot["output"]["data"]["application/vnd.plotly.v1+json"]["layout"]["title"]["text"],
+        "Returns"
+    );
+    assert_eq!(shot["prelude"], serde_json::json!(["window.loaded = 1;"]));
+    assert!(shot["width_px"].as_u64().unwrap() >= 160);
+    let screen = h.screen_to_string();
+    // the first cell's output is a loader script: nothing to show, as in Jupyter
+    assert_eq!(screen.matches("open interactive").count(), 1, "{screen}");
+    assert!(
+        !screen.contains("Figure({...})"),
+        "the picture, not the repr"
+    );
+
+    // a click on the open line
+    let row = screen
+        .lines()
+        .position(|l| l.contains("open interactive in the browser"))
+        .unwrap() as u16;
+    h.mouse_click(10, row).unwrap();
+    let asked = project.join("interactive.json");
+    h.wait_until(|_| asked.exists()).unwrap();
+    let req: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&asked).unwrap()).unwrap();
+    assert_eq!(req["title"], "charts.ipynb · cell 2");
+    assert_eq!(
+        req["outputs"][0]["data"]["application/vnd.plotly.v1+json"]["layout"]["title"]["text"],
+        "Returns"
+    );
+    assert_eq!(req["prelude"], serde_json::json!(["window.loaded = 1;"]));
+
+    // Alt+O from inside the cell does the same
+    fs::remove_file(&asked).unwrap();
+    h.send_key(KeyCode::Up, KeyModifiers::NONE).unwrap();
+    h.send_key(KeyCode::Char('o'), KeyModifiers::ALT).unwrap();
+    h.wait_until(|_| asked.exists()).unwrap();
     h.assert_no_plugin_errors();
 }
 

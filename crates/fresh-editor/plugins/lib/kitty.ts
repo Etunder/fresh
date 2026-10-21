@@ -36,24 +36,26 @@ export const DIACRITICS = [
 ].map((c) => String.fromCodePoint(c));
 export const PLACEHOLDER = String.fromCodePoint(0x10eeee);
 
-/** Actual terminal cell pixels. An explicit wr override wins; WezTerm publishes
- *  current GUI metrics per pane, including font-size and monitor changes. */
-export function cellPixels(): [number, number] {
+/** The terminal cell's size in pixels as measured: WR_CELL_PX=<w>x<h> (wr sets it), else what
+ *  WezTerm publishes for this pane (its config writes it, following font-size and monitor
+ *  changes; herdr's panes inherit WEZTERM_PANE); null when neither says. */
+export function measuredCellPixels(): [number, number] | null {
   const editor = getEditor();
   const parse = (value: string): [number, number] | null => {
     const m = /^(\d+)x(\d+)$/.exec(value.trim());
-    return m && +m[1] > 0 && +m[1] <= 512 && +m[2] > 0 && +m[2] <= 512
-      ? [+m[1], +m[2]] : null;
+    return m && +m[1] > 0 && +m[1] <= 512 && +m[2] > 0 && +m[2] <= 512 ? [+m[1], +m[2]] : null;
   };
   const override = parse(editor.getEnv("WR_CELL_PX") ?? "");
   if (override) return override;
   const prefix = editor.getEnv("FRESH_WEZTERM_METRICS_PREFIX");
   const pane = editor.getEnv("WEZTERM_PANE");
-  if (prefix && pane && /^\d+$/.test(pane)) {
-    const pixels = parse(editor.readFile(prefix + pane + ".txt") ?? "");
-    if (pixels) return pixels;
-  }
-  return [8, 16];
+  if (prefix && pane && /^\d+$/.test(pane)) return parse(editor.readFile(prefix + pane + ".txt") ?? "");
+  return null;
+}
+
+/** The size of a terminal cell in pixels: as measured, else herdr's 8x16. */
+export function cellPixels(): [number, number] {
+  return measuredCellPixels() ?? [8, 16];
 }
 
 /** Width and height of a base64 PNG, from its IHDR chunk; null if it isn't one. */
