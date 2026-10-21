@@ -1540,8 +1540,8 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
         : r.state === "error" ? ` ✗${took}` : r.state === "ok" ? ` ✓${took}` : "";
       const count = s.cell.kind === "code" ? (r?.count != null ? ` [${r.count}]` : " [ ]") : ` ${s.cell.kind}`;
       const label = `── ${i + 1}${count}${state} `;
-      editor.addConceal(buf, NS_RULE, s.start, s.markerEnd, label + "─".repeat(Math.max(4, 48 - label.length)),
-        "unless-cursor-in", s.start, s.markerEnd + 1);
+      // (always: the line is the notebook's, not to read or edit, even with the cursor on it)
+      editor.addConceal(buf, NS_RULE, s.start, s.markerEnd, label + "─".repeat(Math.max(4, 48 - label.length)));
     }
     // a code cell's source on its own ground, the full width, like a notebook's cell box (the
     // rule above it and the outputs below stay on the editor's)
@@ -1688,7 +1688,8 @@ registerHandler("notebook_cursor_moved", (e: { buffer_id: number; old_position: 
     // a move of the cursor (a key, a click) ends "no cell being edited"
     if (nb.parked && e.old_position !== e.new_position) nb.parked = false;
     if (offTheQuotes(nb, e.old_position, e.new_position)) return;
-    if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb);
+    // (where the event says: the editor's own answer can still be the old place)
+    if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb, e.new_position);
   }
 });
 
@@ -1723,6 +1724,8 @@ registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   }
   const hit = nb?.typeset?.get(e.buffer_row);
   if (!nb || !hit) return;
+  // a click on a typeset cell edits it, whatever went before (Shift+Enter, opening)
+  nb.parked = false;
   // (the page's pixels per terminal pixel: rowPx is a row's height in its pixels)
   const [cw, ch] = cellPixels();
   const r = await ask(nb, "mdjump", {
@@ -1735,6 +1738,8 @@ registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   for (const l of hit.lines) if (l.md <= offset) line = l;
   if (!line || nb.bufferId === null) return;
   editor.setBufferCursor(nb.bufferId, line.buf + offset - line.md);
+  // (the plugin's own cursor move fires no cursor_moved: the redraw that shows the source is here)
+  await decorate(nb, line.buf + offset - line.md);
 });
 editor.on("mouse_click", "notebook_page_click");
 
@@ -1848,7 +1853,7 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
     // first code cell, when there is one
     const spans = textToCells(await editor.getBufferText(e.buffer_id));
     const code = spans.find((s) => s.cell.kind === "code");
-    if (code && editor.getCursorPosition() < code.start) {
+    if (code && editor.getCursorPosition() < sourceStart(code)) {
       editor.setBufferCursor(e.buffer_id, sourceStart(code));
       await decorate(copyOf, sourceStart(code));
       return;
@@ -1966,13 +1971,17 @@ async function runAtCursor(advance: boolean): Promise<void> {
   const cursor = editor.getCursorPosition();
   const i = Math.max(0, spans.findIndex((s, k) => cursor >= s.start && (k === spans.length - 1 || cursor < spans[k + 1].start)));
   if (!spans[i]) return;
-  // Shift/Ctrl+Enter end editing: a markdown cell shows typeset, the one it moves on to too
+  // Shift/Ctrl+Enter end editing: a markdown cell shows typeset, the one it moves on to too. The
+  // cursor rests on a markdown cell's rule (its text is folded away under the page: a cursor left
+  // in there would be moved out by the editor, and that move would edit the cell again)
   nb.parked = true;
   await runCells(nb, [spans[i]]);
-  if (advance && spans[i + 1]) {
-    const next = spans[i + 1];
-    editor.setBufferCursor(nb.bufferId!, sourceStart(next));
-    await decorate(nb, sourceStart(next));
+  const rest = (s: Span) => (s.cell.kind === "markdown" && s.markerEnd > s.start ? s.markerEnd : sourceStart(s));
+  const next = advance ? spans[i + 1] : undefined;
+  const target = next ? rest(next) : spans[i].cell.kind === "markdown" ? rest(spans[i]) : null;
+  if (target !== null) {
+    editor.setBufferCursor(nb.bufferId!, target);
+    await decorate(nb, target);
   }
 }
 

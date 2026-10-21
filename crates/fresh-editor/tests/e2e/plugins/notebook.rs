@@ -496,6 +496,8 @@ fn the_kernel_completes_documents_and_can_be_chosen() {
     h.open_file(&nb_path).unwrap();
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
     // the end of `fru` (the working copy ends with a newline)
     h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
     h.send_key(KeyCode::Left, KeyModifiers::NONE).unwrap();
@@ -644,6 +646,8 @@ fn an_interactive_output_opens_in_the_browser() {
     h.open_file(&nb_path).unwrap();
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
     // run the chart cell
     h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
@@ -1494,5 +1498,70 @@ fn a_typesetting_cell_holds_its_place() {
     assert!(!h.screen_to_string().contains("typesetting…"));
     h.wait_until(pictured).unwrap();
     assert_eq!(rule_row(&h), final_row);
+    h.assert_no_plugin_errors();
+}
+
+/// Ctrl+Enter and Shift+Enter in a markdown cell (the last one here: there's no cell to go on to)
+/// typeset it; the cursor rests on its rule, which stays a rule, the cell's id out of reach. A click
+/// on the page edits it again, as many times as it's typeset.
+#[test]
+fn the_run_keys_typeset_a_markdown_cell() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("doc.ipynb");
+    let nb = r##"{
+ "cells": [
+  {"cell_type": "code", "execution_count": null, "id": "hello", "metadata": {}, "outputs": [], "source": ["print('hello')"]},
+  {"cell_type": "markdown", "id": "intro", "metadata": {}, "source": ["# Typeset\n", "\n", "Some words here."]}
+ ],
+ "metadata": {}, "nbformat": 4, "nbformat_minor": 5
+}"##;
+    fs::write(&nb_path, nb).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    let placeholder = '\u{10EEEE}';
+    let typeset = |h: &EditorTestHarness| {
+        let s = h.screen_to_string();
+        s.lines().filter(|l| l.contains(placeholder)).count() == 3 && !s.contains("Some words")
+    };
+    // (each time somewhere else: two quick clicks in one place are a double click)
+    let edit = |h: &mut EditorTestHarness, col: u16| {
+        let row = h
+            .screen_to_string()
+            .lines()
+            .position(|l| l.contains('\u{10EEEE}'))
+            .unwrap() as u16
+            + 1;
+        h.mouse_click(col, row).unwrap();
+        h.wait_until(|h| h.screen_to_string().contains("Some words here."))
+            .unwrap();
+    };
+    h.wait_until(typeset).unwrap();
+    // it opens in the code cell, not on its `# %%` line
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    assert!(!h.screen_to_string().contains("id=hello"));
+
+    for (key, col) in [(KeyModifiers::CONTROL, 20), (KeyModifiers::SHIFT, 30)] {
+        edit(&mut h, col);
+        h.send_key(KeyCode::Enter, key).unwrap();
+        h.wait_until(typeset).unwrap();
+        // the cursor on the cell's rule: still drawn as the rule
+        let text = h.get_buffer_content().unwrap();
+        let rule_end = text.find("[markdown] id=intro").unwrap() + "[markdown] id=intro".len();
+        h.wait_until(|h| h.cursor_position() == rule_end).unwrap();
+        let screen = h.screen_to_string();
+        assert!(
+            screen.contains("── 2 markdown") && !screen.contains("id=intro"),
+            "{screen}"
+        );
+    }
     h.assert_no_plugin_errors();
 }
