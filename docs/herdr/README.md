@@ -17,7 +17,11 @@ in WezTerm on Windows, so the fork:
   convert and clear cells, interrupt and restart the kernel, and pick it. Completion and docs come
   from the kernel, errors and navigation from Python's language server (basedpyright); markdown
   cells show typeset by Typst while the cursor is elsewhere (a click on one goes to that text in
-  its source) and are edited as plain text in a cell box like code's, display math typeset. The
+  its source) and are edited as plain text in a cell box like code's, in JetBrains Mono like the
+  terminal (Notebook: Select Markdown Font), display math typeset. Interactive outputs (Plotly,
+  Altair/Vega, Bokeh, maps) show as a picture nb takes with a headless Edge/Chrome, and open live
+  in the browser with a click or Alt+O. Only cell text is editable (cell markers are protected);
+  Alt+B / Alt+M add cells, Alt+R runs all, F1 lists the keys with clickable actions. The
   tab says `name.ipynb`: the cells are edited in a percent-format working copy (`name.ipynb.py`,
   under `.git/fresh-notebooks/`) so Python's tools work on them; a markdown cell is a raw string
   there (`r"""` … `"""`, the quotes hidden), or `# ` comments if its text has a `"""` of its own. Saving writes the notebook (byte-identical where nothing
