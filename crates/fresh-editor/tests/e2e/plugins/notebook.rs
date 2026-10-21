@@ -263,15 +263,15 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         !screen.contains("nbformat"),
         "the JSON view is gone:\n{screen}"
     );
-    // the cursor starts in the markdown cell: its source as it is (a raw string in the working
-    // copy, its quotes hidden)
-    assert!(
-        screen.contains("# Report") && !screen.contains("# # Report") && !screen.contains("\"\"\""),
-        "markdown cells are shown as written:\n{screen}"
-    );
+    // it opens with no cell being edited, the cursor in the code cell: the markdown rendered (once
+    // nb has answered for its page), no `# ` prefix nor heading mark, no quotes
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("   Report") && !s.contains("# Report") && !s.contains("\"\"\"")
+    })
+    .unwrap();
 
-    // Alt+Enter on the markdown cell moves on; on the code cell it runs it
-    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    // Alt+Enter on the code cell runs it
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
     h.wait_until(|h| {
         let s = h.screen_to_string();
@@ -436,8 +436,15 @@ fn display_math_is_typeset_as_an_image() {
     let req: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(project.join("math.json")).unwrap()).unwrap();
     assert_eq!(req["latex"], "e^{i\\pi} + 1 = 0");
-    // while the cursor is in the cell, the source shows above the image
-    assert!(h.screen_to_string().contains("$$e^{i\\pi} + 1 = 0$$"));
+    // it opens with no cell being edited: the image, not the source
+    assert!(!h.screen_to_string().contains("$$"));
+    // in the cell, the source shows above the image
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
+    h.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("$$e^{i\\pi} + 1 = 0$$"))
+        .unwrap();
 
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
         .unwrap();
@@ -834,7 +841,11 @@ fn cells_are_edited_with_commands() {
         .unwrap();
     let pair = |k: &str, s: &str| (k.to_string(), s.to_string());
 
-    // a new cell under the markdown one, typed into, then moved to the top
+    // a new cell under the markdown one (the cursor to it: it opens in the code cell), typed into,
+    // then moved to the top
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
     palette(&mut h, "Notebook: Insert Cell Below");
     h.wait_until(|h| h.screen_to_string().contains("── 3 [ ]"))
         .unwrap();
@@ -1250,7 +1261,11 @@ fn a_markdown_cell_is_edited_as_plain_text() {
     );
     let at = |h: &EditorTestHarness, s: &str| text(h).find(s).unwrap();
 
-    // down from the `# %%` line: past the hidden `r"""` line, onto the text
+    // down from the `# %%` line (the top: the notebook opens in its code cell): past the hidden
+    // `r"""` line, onto the text
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
     h.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
     h.wait_until(|h| h.cursor_position() == at(h, "# Report"))
         .unwrap();
@@ -1356,5 +1371,67 @@ fn a_resize_typesets_markdown_again_at_the_new_width() {
     {
         assert!(l.starts_with("   "), "{l}");
     }
+    h.assert_no_plugin_errors();
+}
+
+/// A notebook opens with no cell being edited: its markdown typeset at once, the cursor off it.
+/// Shift+Enter in a markdown cell ends editing it: typeset, even with no cell after it to go to.
+#[test]
+fn markdown_opens_typeset_and_shift_enter_typesets_it_again() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("doc.ipynb");
+    fs::write(
+        &nb_path,
+        NOTEBOOK.replace(
+            r##""source": ["# Report"]"##,
+            r##""source": ["# Typeset\n", "\n", "Some words here."]"##,
+        ),
+    )
+    .unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    let placeholder = '\u{10EEEE}';
+    let typeset = |h: &EditorTestHarness| {
+        let s = h.screen_to_string();
+        s.lines().filter(|l| l.contains(placeholder)).count() == 3 && !s.contains("Some words")
+    };
+    // typeset without the cursor having moved; the cursor in the code cell, the rule drawn
+    h.wait_until(|h| typeset(h) && h.screen_to_string().contains("── 1 markdown"))
+        .unwrap();
+    let at = h.cursor_position();
+    let text = h.get_buffer_content().unwrap();
+    assert_eq!(
+        &text[at..at + 5],
+        "print",
+        "the cursor starts in the code cell"
+    );
+    // the code cell's rule, on the same row whether the markdown above is typeset or edited
+    let rule_row = |h: &EditorTestHarness| {
+        h.screen_to_string()
+            .lines()
+            .position(|l| l.contains("── 2 [ ]"))
+    };
+    let typeset_row = rule_row(&h);
+
+    // into the markdown cell (its source, to edit), then Shift+Enter there: typeset again
+    // (once the notebook has put the cursor in its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
+    h.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("Some words here."))
+        .unwrap();
+    assert_eq!(rule_row(&h), typeset_row, "nothing below it moved");
+    h.send_key(KeyCode::Enter, KeyModifiers::SHIFT).unwrap();
+    h.wait_until(typeset).unwrap();
     h.assert_no_plugin_errors();
 }

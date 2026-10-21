@@ -109,6 +109,12 @@ type Notebook = {
   cursorCell?: string | null;
   /** The text changed since the last redraw (its spans are out of date). */
   edited?: boolean;
+  /** No cell is being edited, wherever the cursor is: on opening, and after Shift/Ctrl+Enter, so
+   *  markdown shows typeset (moving, clicking or typing ends it). */
+  parked?: boolean;
+  /** How many rows each markdown cell took last time its source showed (by its text): its typeset
+   *  page is given as many, so going from one to the other moves nothing below it. */
+  mdRows?: Map<string, { md: string; rows: number }>;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
   /** The rows under a cell's last line (by its line number) that open its outputs in the browser:
    *  which of the virtual rows below the line they are. */
@@ -951,7 +957,9 @@ function formulaImage(nb: Notebook, latex: string, colorKey = "editor.fg"): Imag
   if (known !== undefined) return typeof known === "string" ? null : known;
   formulas.set(key, "pending");
   const size = 14;
-  void ask(nb, "math", { latex, color, size, scale: (density * 0.8 * ch) / size }).then((r) => {
+  const [cw] = cellPixels();
+  // padded to whole cells by nb, so it's shown pixel for pixel, not stretched to fit them
+  void ask(nb, "math", { latex, color, size, scale: (density * 0.8 * ch) / size, cell: [cw * density, ch * density] }).then((r) => {
     const img = r.ok && typeof r.png === "string"
       ? sendImage(r.png, Number(r.width), Number(r.height), density)
       : null;
@@ -1301,7 +1309,9 @@ function richLines(nb: Notebook, o: Output, data: Record<string, unknown>): OutL
 /** A markdown cell as rendered text while the cursor is elsewhere (the `# ` prefixes, `#` heading
  *  marks, `**`, backticks and link targets hidden, math as Unicode), its source while editing it:
  *  every conceal is "unless the cursor is in this cell". The styles stay on in both. */
-function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>, editing = false): void {
+function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, string>, editing = false): number {
+  // the rows of typeset formulas it puts under their blocks
+  let formulaRows = 0;
   const scope: [number, number] = [s.start, s.end + 1];
   // a raw string's lines get the margin the code cells have (in the cell's box, its own): ahead of
   // what hides a line's first characters, as anything anchored there hides with them; else on its own
@@ -1332,6 +1342,7 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
       style(from, to, { fg: "syntax.number" });
     }
     if (img) {
+      formulaRows += img.rows;
       const fg = imageFg(img.id);
       const last = block.lines[block.lines.length - 1];
       for (let row = 0; row < img.rows; row++)
@@ -1414,6 +1425,43 @@ function renderMarkdown(nb: Notebook, buf: number, s: Span, lineAt: Map<number, 
   }
   if (display) endDisplay(display); // a block the cell never closes
   for (const p of margins) editor.addVirtualTextStyled(buf, `${NS_PAD}md:${p}`, p, "   ", {}, true);
+  return formulaRows;
+}
+
+/** How many rows a line takes, wrapped at `width` columns as the editor wraps: at a space, else
+ *  where the width ends. (An estimate: what the editor's own wrapping makes of it may differ.) */
+function wrappedRows(text: string, width: number): number {
+  if (width < 4 || !text) return 1;
+  const w = (t: string) => (/^[\x20-\x7e]*$/.test(t) ? t.length : editor.stringWidth(t));
+  let rows = 1;
+  let col = 0;
+  for (const word of text.split(/(?<= )/)) {
+    let len = w(word);
+    const bare = w(word.trimEnd());
+    if (col + bare <= width) {
+      col += len;
+      continue;
+    }
+    if (col > 0) {
+      rows++;
+      col = 0;
+    }
+    while (len > width) {
+      rows++;
+      len -= width;
+    }
+    col = len;
+  }
+  return rows;
+}
+
+/** The rows of a markdown cell's typeset page for this text, if one is drawn (or still drawn while
+ *  the next one is made). */
+function pageRows(nb: Notebook, cellId: string, md: string): number | null {
+  const page = pages.get(nb)?.get(cellId);
+  const ready = page?.state === "ready" ? page : page?.previous;
+  if (!ready || ready.markdown !== md) return null;
+  return ready.tiles.reduce((n, t) => n + t.rows, 0);
 }
 
 /** Draws the notebook's cells: rules, boxes, outputs, typeset markdown. `cursor`: where the cursor
@@ -1438,7 +1486,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   nb.spans = spans;
   nb.edited = false;
   const cursor = cursorAt ?? (editor.getActiveBufferId() === buf ? editor.getCursorPosition() : -1);
-  nb.cursorCell = markdownCellAt(spans, cursor);
+  nb.cursorCell = nb.parked ? null : markdownCellAt(spans, cursor);
   const typeset = new Map<number, { cell: string; lines: MdLine[]; rowPx: number }>();
   nb.typeset = typeset;
   const links = new Map<number, { cell: string; rows: Set<number> }>();
@@ -1505,9 +1553,24 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
           for (let k = 0; k < img.rows; k++, row++)
             editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg, clip: true }, false, NS_OUT, 100 + row);
         }
+        // as many rows as its source took, so nothing below moves when it's typeset
+        const known = nb.mdRows?.get(s.cell.id);
+        const sourceRows = known?.md === md.md ? known.rows : mdSourceRows(s, lineAt);
+        for (; row < sourceRows; row++) editor.addVirtualLine(buf, s.start, "", { fg: "editor.fg" }, false, NS_OUT, 100 + row);
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
       } else {
-        renderMarkdown(nb, buf, s, lineAt, sourceVisible);
+        const formulaRows = renderMarkdown(nb, buf, s, lineAt, sourceVisible);
+        if (sourceVisible && s.markerEnd > s.start) {
+          // the box as tall as the typeset page, so nothing below moves when it's edited (and the
+          // page given as many rows as the box, once that's known)
+          const text = cellMarkdown(s, lineAt).md;
+          const rows = mdSourceRows(s, lineAt) + formulaRows;
+          if (!nb.mdRows) nb.mdRows = new Map();
+          nb.mdRows.set(s.cell.id, { md: text, rows });
+          const typesetRows = pageRows(nb, s.cell.id, text) ?? 0;
+          for (let k = 0; k < typesetRows - rows; k++)
+            editor.addVirtualLine(buf, textStart(s.lastLine), " ".repeat(500), { bg: "ui.notebook_cell_bg", clip: true }, false, NS_OUT, -1000 + k);
+        }
         // the raw string's quotes out of sight: its `r"""` line (with nothing after the line above),
         // the `"""` at the end of the last
         const q = s.quotes;
@@ -1578,6 +1641,12 @@ function fixQuotes(buf: number, text: string): boolean {
   return true;
 }
 
+/** The rows a markdown cell's source takes in its box: its lines, wrapped, and the two bands. */
+function mdSourceRows(s: Span, lineAt: Map<number, string>): number {
+  const width = Math.max(10, (editor.getViewport()?.width ?? 80) - 3);
+  return 2 + s.lineStarts.reduce((n, p) => n + wrappedRows(mdText(s, p, lineAt), width), 0);
+}
+
 /** The id of the markdown cell holding `pos` (its `# %%` line included), if any. */
 function markdownCellAt(spans: Span[], pos: number): string | null {
   const s = spans.find((s) => s.start <= pos && pos <= s.end);
@@ -1588,6 +1657,8 @@ function markdownCellAt(spans: Span[], pos: number): string | null {
 registerHandler("notebook_cursor_moved", (e: { buffer_id: number; old_position: number; new_position: number }) => {
   for (const nb of byCopy.values()) {
     if (nb.bufferId !== e.buffer_id || !nb.spans) continue;
+    // a move of the cursor (a key, a click) ends "no cell being edited"
+    if (nb.parked && e.old_position !== e.new_position) nb.parked = false;
     if (offTheQuotes(nb, e.old_position, e.new_position)) return;
     if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb);
   }
@@ -1727,6 +1798,8 @@ editor.on("resize", "notebook_resized");
 /** The working copy is open in `buffer`: set it up as the notebook's view. */
 function copyOpened(nb: Notebook, buffer: number): void {
   nb.bufferId = buffer;
+  // opened with no cell being edited: markdown typeset, wherever the cursor starts
+  nb.parked = true;
   watchCellPixels();
   // the tab is the notebook's, not its working copy's (name.ipynb.py)
   editor.setBufferTabLabel(buffer, nb.ipynb.split(/[\\/]/).pop() ?? nb.ipynb);
@@ -1743,6 +1816,15 @@ registerHandler("notebook_after_open", async (e: { path: string; buffer_id: numb
   const copyOf = byCopy.get(pathKey(e.path));
   if (copyOf) {
     copyOpened(copyOf, e.buffer_id);
+    // the cursor off the first cell's `# %%` line (which shows itself raw under the cursor): to the
+    // first code cell, when there is one
+    const spans = textToCells(await editor.getBufferText(e.buffer_id));
+    const code = spans.find((s) => s.cell.kind === "code");
+    if (code && editor.getCursorPosition() < code.start) {
+      editor.setBufferCursor(e.buffer_id, sourceStart(code));
+      await decorate(copyOf, sourceStart(code));
+      return;
+    }
     await decorate(copyOf);
     return;
   }
@@ -1856,6 +1938,8 @@ async function runAtCursor(advance: boolean): Promise<void> {
   const cursor = editor.getCursorPosition();
   const i = Math.max(0, spans.findIndex((s, k) => cursor >= s.start && (k === spans.length - 1 || cursor < spans[k + 1].start)));
   if (!spans[i]) return;
+  // Shift/Ctrl+Enter end editing: a markdown cell shows typeset, the one it moves on to too
+  nb.parked = true;
   await runCells(nb, [spans[i]]);
   if (advance && spans[i + 1]) {
     const next = spans[i + 1];
@@ -2275,6 +2359,7 @@ registerHandler("notebook_on_modified", (e: { buffer_id: number }) => {
   for (const nb of byCopy.values()) {
     if (nb.bufferId === e.buffer_id) {
       nb.edited = true;
+      nb.parked = false;
       if (pending) return;
       pending = true;
       editor.setTimeout(150, "notebook_redraw");
