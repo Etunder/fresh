@@ -112,9 +112,6 @@ type Notebook = {
   /** No cell is being edited, wherever the cursor is: on opening, and after Shift/Ctrl+Enter, so
    *  markdown shows typeset (moving, clicking or typing ends it). */
   parked?: boolean;
-  /** How many rows each markdown cell took last time its source showed (by its text): its typeset
-   *  page is given as many, so going from one to the other moves nothing below it. */
-  mdRows?: Map<string, { md: string; rows: number }>;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
   /** The rows under a cell's last line (by its line number) that open its outputs in the browser:
    *  which of the virtual rows below the line they are. */
@@ -991,6 +988,38 @@ type MdLine = { md: number; buf: number };
  *  source while the cursor is in another cell. `key` is what it was made from. */
 type Page = { key: string; markdown: string; state: "pending" | "failed" | "ready"; tiles: Image[]; rowPx: number; previous?: Page };
 const pages = new Map<Notebook, Map<string, Page>>();
+
+/** How many rows each typeset page took, by what it was made from (hashed), kept across sessions:
+ *  a notebook opened again holds the room its markdown takes before it's drawn, so nothing moves
+ *  when it is. */
+let pageRowsCache: Record<string, number> | null = null;
+const pageRowsFile = () => editor.pathJoin(editor.getDataDir(), "notebooks", "page-rows.json");
+function knownPageRows(key: string): number | undefined {
+  if (!pageRowsCache) {
+    try {
+      pageRowsCache = JSON.parse(editor.readFile(pageRowsFile()) ?? "{}") as Record<string, number>;
+    } catch {
+      pageRowsCache = {};
+    }
+  }
+  return pageRowsCache[hashKey(key)];
+}
+function rememberPageRows(key: string, rows: number): void {
+  if (knownPageRows(key) === rows) return;
+  const cache = pageRowsCache!;
+  cache[hashKey(key)] = rows;
+  // the most recent thousand (keys keep the order they were added in)
+  const keys = Object.keys(cache);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 1000))) delete cache[k];
+  editor.createDir(editor.pathDirname(pageRowsFile()));
+  editor.writeFile(pageRowsFile(), JSON.stringify(cache));
+}
+/** A short name for a long key (FNV-1a, and its length). */
+function hashKey(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  return `${h.toString(16)}-${s.length}`;
+}
 /** The tiles' images, by their hash (the same slice of page is sent once). */
 const pageTiles = new Map<string, Image>();
 const PAGE_TILE_ROWS = 8;
@@ -1081,16 +1110,12 @@ function cellPage(nb: Notebook, s: Span, md: string): Page | null {
     }
     page.state = "ready";
     page.previous = undefined;
+    rememberPageRows(key, page.tiles.reduce((n, t) => n + t.rows, 0));
     void decorate(nb);
   });
   return previous ?? null;
 }
 
-/** Keep the editable layout until the first image is ready, avoiding a transient text preview. */
-function markdownSourceVisible(nb: Notebook, s: Span): boolean {
-  const page = pages.get(nb)?.get(s.cell.id);
-  return nb.cursorCell === s.cell.id || (!!IMAGES && page?.state === "pending" && !page.previous);
-}
 
 /** Deletes the tiles no page shows any more. */
 function dropStalePages(): void {
@@ -1524,7 +1549,8 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     const md = s.cell.kind === "markdown" && s.markerEnd > s.start && nb.cursorCell !== s.cell.id
       ? cellMarkdown(s, lineAt) : null;
     const page = md ? cellPage(nb, s, md.md) : null;
-    const sourceVisible = s.cell.kind === "markdown" && markdownSourceVisible(nb, s);
+    // (a markdown cell's source shows only while it's edited: not while its page is being made)
+    const sourceVisible = s.cell.kind === "markdown" && nb.cursorCell === s.cell.id;
     const bodyStart = sourceStart(s);
     const boxed = s.cell.kind === "code" || sourceVisible;
     // (the box's bottom band is the first row under the cell's last line, before any output)
@@ -1544,6 +1570,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
       // typeset, unless the cursor is in it (its source then, to edit): the source folds away under
       // the `# %%` rule, the page's rows hang under that
       const last = s.quotes ? s.quotes.closeEnd : s.lastEnd;
+      const pending = md && !page ? pages.get(nb)?.get(s.cell.id) : undefined;
       if (md && page && page.tiles.length && last + 1 <= at) {
         // (a fold always shows a mark after its first line: a pencil, the cell is there to edit)
         editor.addFold(buf, s.markerEnd + 1, last + 1, "✎");
@@ -1553,20 +1580,21 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
           for (let k = 0; k < img.rows; k++, row++)
             editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg, clip: true }, false, NS_OUT, 100 + row);
         }
-        // as many rows as its source took, so nothing below moves when it's typeset
-        const known = nb.mdRows?.get(s.cell.id);
-        const sourceRows = known?.md === md.md ? known.rows : mdSourceRows(s, lineAt);
-        for (; row < sourceRows; row++) editor.addVirtualLine(buf, s.start, "", { fg: "editor.fg" }, false, NS_OUT, 100 + row);
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
+      } else if (md && pending?.state === "pending" && last + 1 <= at) {
+        // its page on the way: the source out of sight already, and the room the page took last
+        // time (this notebook opened before), else a line saying so
+        editor.addFold(buf, s.markerEnd + 1, last + 1, "✎");
+        const rows = knownPageRows(pending.key);
+        if (rows) for (let k = 0; k < rows; k++) editor.addVirtualLine(buf, s.start, "", { fg: "editor.fg" }, false, NS_OUT, 100 + k);
+        else editor.addVirtualLine(buf, s.start, "   typesetting…", { fg: "editor.line_number_fg" }, false, NS_OUT, 100);
       } else {
         const formulaRows = renderMarkdown(nb, buf, s, lineAt, sourceVisible);
         if (sourceVisible && s.markerEnd > s.start) {
-          // the box as tall as the typeset page, so nothing below moves when it's edited (and the
-          // page given as many rows as the box, once that's known)
+          // the box at least as tall as the typeset page: going into a cell moves nothing below it
+          // when its page is the taller
           const text = cellMarkdown(s, lineAt).md;
           const rows = mdSourceRows(s, lineAt) + formulaRows;
-          if (!nb.mdRows) nb.mdRows = new Map();
-          nb.mdRows.set(s.cell.id, { md: text, rows });
           const typesetRows = pageRows(nb, s.cell.id, text) ?? 0;
           for (let k = 0; k < typesetRows - rows; k++)
             editor.addVirtualLine(buf, textStart(s.lastLine), " ".repeat(500), { bg: "ui.notebook_cell_bg", clip: true }, false, NS_OUT, -1000 + k);

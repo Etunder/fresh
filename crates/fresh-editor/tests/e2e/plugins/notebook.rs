@@ -151,6 +151,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     json.dump(req, f)
                 body.update({"png": PNG, "width": 80, "height": 48})
             elif url.path == "/md" and "Typeset" in req["text"]:
+                if "Slowly" in req["text"]:
+                    import time
+                    time.sleep(1.5)
                 # a page of two tiles: 3 rows (at 8x16 cells, drawn at twice that)
                 with open(os.path.join(os.path.dirname(notebook), "md.json"), "w") as f:
                     json.dump(req, f)
@@ -1173,22 +1176,7 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
 
     let mut h = harness(&project, &fake_nb);
     h.open_file(&nb_path).unwrap();
-    // the cursor starts in the markdown cell: its source, in a cell box like a code cell's (a
-    // band of half blocks above it, two columns of the cell's ground before each line)
-    h.wait_until(|h| {
-        let screen = h.screen_to_string();
-        let lines: Vec<&str> = screen.lines().collect();
-        let at = |text: &str| lines.iter().position(|l| l.contains(text));
-        match (at("# Typeset"), at("Some words here.")) {
-            (Some(title), Some(words)) => {
-                title > 0 && lines[title - 1].starts_with('▄') && lines[words + 1].starts_with('▀')
-            }
-            _ => false,
-        }
-    })
-    .unwrap();
-    // in the code cell, the markdown one is typeset: three image rows under its rule, no source
-    h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
+    // it opens with the markdown typeset: three image rows under its rule, no source
     h.wait_until(|h| {
         let s = h.screen_to_string();
         !s.contains("Some words") && s.lines().filter(|l| l.contains('\u{10EEEE}')).count() == 3
@@ -1209,6 +1197,20 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
         .unwrap() as u16
         + 1;
     h.mouse_click(20, row).unwrap();
+    // its source, in a cell box like a code cell's (a band of half blocks above it, two columns of
+    // the cell's ground before each line)
+    h.wait_until(|h| {
+        let screen = h.screen_to_string();
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = |text: &str| lines.iter().position(|l| l.contains(text));
+        match (at("# Typeset"), at("Some words here.")) {
+            (Some(title), Some(words)) => {
+                title > 0 && lines[title - 1].starts_with('▄') && lines[words + 1].starts_with('▀')
+            }
+            _ => false,
+        }
+    })
+    .unwrap();
     h.wait_until(|h| h.screen_to_string().contains("Some words here."))
         .unwrap();
     // (the cell opens at the click; the cursor lands on the text once nb has said where)
@@ -1415,13 +1417,6 @@ fn markdown_opens_typeset_and_shift_enter_typesets_it_again() {
         "print",
         "the cursor starts in the code cell"
     );
-    // the code cell's rule, on the same row whether the markdown above is typeset or edited
-    let rule_row = |h: &EditorTestHarness| {
-        h.screen_to_string()
-            .lines()
-            .position(|l| l.contains("── 2 [ ]"))
-    };
-    let typeset_row = rule_row(&h);
 
     // into the markdown cell (its source, to edit), then Shift+Enter there: typeset again
     // (once the notebook has put the cursor in its code cell, on opening)
@@ -1430,8 +1425,74 @@ fn markdown_opens_typeset_and_shift_enter_typesets_it_again() {
     h.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
     h.wait_until(|h| h.screen_to_string().contains("Some words here."))
         .unwrap();
-    assert_eq!(rule_row(&h), typeset_row, "nothing below it moved");
     h.send_key(KeyCode::Enter, KeyModifiers::SHIFT).unwrap();
     h.wait_until(typeset).unwrap();
+    h.assert_no_plugin_errors();
+}
+
+/// While a markdown cell's page is made, its source doesn't show (it would jump when the page
+/// comes): a line says it's being typeset. Opened again, the notebook holds the room the page took,
+/// so the cells below are where they'll stay before it's drawn.
+#[test]
+fn a_typesetting_cell_holds_its_place() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("doc.ipynb");
+    fs::write(
+        &nb_path,
+        NOTEBOOK.replace(
+            r##""source": ["# Report"]"##,
+            r##""source": ["# Typeset\n", "\n", "Slowly typeset words."]"##,
+        ),
+    )
+    .unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    let placeholder = '\u{10EEEE}';
+    let rule_row = |h: &EditorTestHarness| {
+        h.screen_to_string()
+            .lines()
+            .position(|l| l.contains("── 2 [ ]"))
+    };
+    let pictured = |h: &EditorTestHarness| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+            == 3
+    };
+
+    // (another file open too: closing the notebook mustn't leave the window empty, the explorer
+    // would open and the pane narrow, and a page for another width is another page)
+    let other = project.join("notes.txt");
+    fs::write(&other, "notes\n").unwrap();
+    h.open_file(&other).unwrap();
+    h.open_file(&nb_path).unwrap();
+    // the page on its way: a line saying so, never the source
+    h.wait_until(|h| h.screen_to_string().contains("typesetting…"))
+        .unwrap();
+    assert!(!h.screen_to_string().contains("Slowly typeset words"));
+    h.wait_until(pictured).unwrap();
+    let final_row = rule_row(&h);
+
+    // opened again: the page's 3 rows held while it's made, the code cell already where it stays
+    let buffer = h.editor().active_buffer();
+    h.editor_mut().close_buffer(buffer).unwrap();
+    h.render().unwrap();
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| rule_row(h).is_some() && !pictured(h))
+        .unwrap();
+    assert_eq!(rule_row(&h), final_row, "{}", h.screen_to_string());
+    assert!(!h.screen_to_string().contains("typesetting…"));
+    h.wait_until(pictured).unwrap();
+    assert_eq!(rule_row(&h), final_row);
     h.assert_no_plugin_errors();
 }
