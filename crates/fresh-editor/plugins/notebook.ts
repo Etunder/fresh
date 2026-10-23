@@ -1898,6 +1898,54 @@ async function outputAtCursor(): Promise<{ nb: Notebook; cell: number; text: str
   return { nb, cell: i + 1, text };
 }
 
+// ── Backspace and Delete stop at a cell's edge ───────────────────────
+//
+// The line break between a `# %%` line and its cell's first line is the cell's own: a Backspace at
+// the start of the first line (an empty cell held down, say) or a Delete at the end of the line
+// before a `# %%` would join the two and the cell would be gone. They stop there instead; anywhere
+// else, and with a selection, they're the editor's own. (A script's `# %%` lines are its text.)
+
+const isMarker = (line: string) => MARKER.test(line.replace(/\r$/, ""));
+
+async function deleteKey(backward: boolean): Promise<void> {
+  const own = () => editor.executeAction(backward ? "delete_backward" : "delete_forward");
+  const nb = active();
+  const c = editor.getPrimaryCursor();
+  if (!nb || nb.script || nb.bufferId === null || !c || editor.getAllCursors().length !== 1 ||
+    (c.selection && c.selection.start !== c.selection.end)) {
+    own();
+    return;
+  }
+  const at = c.position;
+  // (byte offsets: the lines around the cursor, a `# %%` line being short and ASCII)
+  const before = at > 0 ? await editor.getBufferText(nb.bufferId, Math.max(0, at - 200), at) : "";
+  const after = await editor.getBufferText(nb.bufferId, at, at + 200);
+  const lineBefore = before.split("\n");
+  if (backward) {
+    // at a line's start, the line above a `# %%` one, or this line one
+    const atLineStart = before.endsWith("\n");
+    if (atLineStart && (isMarker(lineBefore[lineBefore.length - 2] ?? "") || isMarker(after.split("\n")[0]))) return;
+  } else {
+    // at a line's end, the next line a `# %%` one (or this one: its line break)
+    const lines = after.split("\n");
+    const atLineEnd = after.startsWith("\n") || after.startsWith("\r\n");
+    if (atLineEnd && (isMarker(lines[1] ?? "") || isMarker(lineBefore[lineBefore.length - 1] + lines[0]))) return;
+  }
+  own();
+}
+// one at a time, each after the last has landed (a held key's repeats would otherwise all look at
+// the text before any of them, and run past the edge)
+let deleting: Promise<void> = Promise.resolve();
+const queueDelete = (backward: boolean) => {
+  deleting = deleting.then(() => deleteKey(backward)).then(async () => {
+    const buf = editor.getActiveBufferId();
+    if (buf) await editor.getBufferText(buf, 0, 0);
+  }).catch(() => {});
+  return deleting;
+};
+registerHandler("notebook_backspace", () => queueDelete(true));
+registerHandler("notebook_delete", () => queueDelete(false));
+
 registerHandler("notebook_copy_output", async () => {
   const o = await outputAtCursor();
   if (!o) return;
@@ -2489,6 +2537,8 @@ editor.defineMode("notebook", [
   ["M-r", "notebook_run_all"],
   ["M-o", "notebook_open_interactive"],
   ["M-c", "notebook_copy_output"],
+  ["Backspace", "notebook_backspace"],
+  ["Delete", "notebook_delete"],
   ["F1", "notebook_shortcuts"],
   ["F5", "python_run_file"],
   ["M-S-Up", "notebook_move_up"],

@@ -1854,3 +1854,51 @@ fn a_cell_is_added_with_the_mouse() {
     );
     h.assert_no_plugin_errors();
 }
+
+/// Backspace at the start of a cell's first line (an empty cell's, held down) stops there instead
+/// of joining the line to the cell's `# %%` line, which would end the cell. Elsewhere it deletes as
+/// usual. (Delete at the end of the line before a `# %%` stops the same way.)
+#[test]
+fn backspace_and_delete_stop_at_a_cells_edge() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    fs::write(&nb_path, NOTEBOOK).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    // (once the notebook has put the cursor at the start of its code cell, on opening)
+    h.wait_until(|h| h.cursor_position() > 0).unwrap();
+    let start = h.cursor_position();
+    let text = h.get_buffer_content().unwrap();
+    assert!(text[start..].starts_with("print('hello')"), "{text:?}");
+    for _ in 0..5 {
+        h.send_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+    }
+    // and inside a line, Backspace deletes as usual
+    h.send_key(KeyCode::End, KeyModifiers::NONE).unwrap();
+    h.type_text("!").unwrap();
+    h.wait_until(|h| h.get_buffer_content().unwrap().contains("print('hello')!"))
+        .unwrap();
+    h.send_key(KeyCode::Backspace, KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| !h.get_buffer_content().unwrap().contains("print('hello')!"))
+        .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [
+            ("markdown".to_string(), "# Report".to_string()),
+            ("code".to_string(), "print('hello')".to_string()),
+        ]
+    );
+    h.assert_no_plugin_errors();
+}
