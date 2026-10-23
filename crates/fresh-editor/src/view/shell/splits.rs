@@ -1288,7 +1288,15 @@ impl PaneControls {
     pub fn reserve(self) -> u16 {
         match self.maximize || self.close {
             false => 0,
-            true => 1 + 1 + self.maximize as u16 + self.close as u16 + 1,
+            // (a blank between `□` and `×` when there are both: one cell apart, a
+            // click meant for one landed on the other)
+            true => {
+                1 + 1
+                    + self.maximize as u16
+                    + (self.maximize && self.close) as u16
+                    + self.close as u16
+                    + 1
+            }
         }
     }
 }

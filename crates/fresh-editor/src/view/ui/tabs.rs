@@ -45,8 +45,8 @@ pub fn split_control_reserve(show_maximize: bool, show_close: bool) -> u16 {
     if !show_maximize && !show_close {
         return 0;
     }
-    // gap(1) + right-overflow slot(1) + maximize + close + trailing blank(1).
-    1 + 1 + show_maximize as u16 + show_close as u16 + 1
+    // gap(1) + right-overflow slot(1) + maximize + [blank between] + close + trailing blank(1).
+    1 + 1 + show_maximize as u16 + (show_maximize && show_close) as u16 + show_close as u16 + 1
 }
 
 /// Width available for laying out / scrolling the real tabs, given the total
@@ -371,8 +371,8 @@ mod tests {
         // drawn inline with the tabs), i.e. gap + `>` slot + □ + trail = 4.
         assert_eq!(split_control_reserve(true, false), 4);
         // Multiple splits, not maximized: full cluster `> □ ×`, i.e.
-        // gap + `>` slot + □ + × + trail = 5.
-        assert_eq!(split_control_reserve(true, true), 5);
+        // gap + `>` slot + □ + blank + × + trail = 6.
+        assert_eq!(split_control_reserve(true, true), 6);
     }
 
     // --- Path disambiguation of same-named tabs (issue #2851) -----------

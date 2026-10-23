@@ -379,7 +379,7 @@ fn control(glyph: &'static str, hovered: bool, target: HoverTarget, fact: UiFact
         .on_leave(hover(None))
 }
 
-/// The cluster: `[gap] [gap] □ × [trail]`, over the columns reserved for it.
+/// The cluster: `[gap] [gap] □ [gap] × [trail]`, over the columns reserved for it.
 ///
 /// It used to carry the `>` itself, drawn when the tabs overflowed and
 /// stepping the editor's own offset. The strip is a window now and the window
@@ -404,6 +404,9 @@ fn cluster(pane: LeafId, c: Cluster) -> Node<UiMsg> {
         );
     }
     if c.controls.close {
+        if c.controls.maximize {
+            cells.push(row().w(one));
+        }
         cells.push(
             control(
                 "×",
