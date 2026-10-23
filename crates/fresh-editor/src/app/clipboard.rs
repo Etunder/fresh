@@ -565,6 +565,10 @@ impl Editor {
                 })
                 .collect();
 
+            if self.refuse_notebook_edits(&events) {
+                return;
+            }
+
             // Apply events with atomic undo using bulk edit for O(n) performance
             if events.len() > 1 {
                 // Use optimized bulk edit for multi-cursor cut

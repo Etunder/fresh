@@ -90,8 +90,8 @@ use anyhow::{anyhow, Result};
 use fresh_core::api::{
     ActionSpec, BufferInfo, CompositeHunk, CreateCompositeBufferOptions, EditorStateSnapshot,
     GrammarInfoSnapshot, JsCallbackId, LanguagePackConfig, LspServerPackConfig, OverlayOptions,
-    PluginCommand, PluginMarker, PluginResponse, ScrollbarMarker, SearchHandleRegistry,
-    SearchHandleState, SearchTakeResult, SplitWindowOptions, SyntaxRegion,
+    PluginCommand, PluginCompletionItem, PluginMarker, PluginResponse, ScrollbarMarker,
+    SearchHandleRegistry, SearchHandleState, SearchTakeResult, SplitWindowOptions, SyntaxRegion,
 };
 use fresh_core::command::Command;
 use fresh_core::overlay::OverlayNamespace;
@@ -115,6 +115,28 @@ type PluginApiExports =
 /// A `WidgetSpec` from a plugin, or why it isn't one: malformed JSON, or
 /// a `List`/`Tree` whose item keys don't match its items one to one (see
 /// `WidgetSpec::item_keys_problem`).
+/// Whether `s` is one or more complete kitty graphics commands (`ESC _ G … ESC \`) and nothing
+/// else: no other escapes, no control bytes, nothing between them.
+fn is_kitty_graphics(s: &str) -> bool {
+    let mut rest = s;
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let Some(body) = rest.strip_prefix("\x1b_G") else {
+            return false;
+        };
+        let Some(end) = body.find("\x1b\\") else {
+            return false;
+        };
+        if body[..end].bytes().any(|b| b < 0x20 || b == 0x7f) {
+            return false;
+        }
+        rest = &body[end + 2..];
+    }
+    true
+}
+
 fn parse_widget_spec(json: serde_json::Value) -> Result<fresh_core::api::WidgetSpec, String> {
     let spec: fresh_core::api::WidgetSpec =
         serde_json::from_value(json).map_err(|e| e.to_string())?;
@@ -1437,6 +1459,24 @@ impl JsEditorApi {
         let _ = self
             .command_sender
             .send(PluginCommand::SetStatus { message: msg });
+    }
+
+    #[plugin_api(section = "Terminal Graphics")]
+
+    /// Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+    /// image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+    /// lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+    /// the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+    ///
+    /// @param commands - one or more complete `ESC _ G … ESC \` sequences and nothing else
+    /// @returns false, sending nothing, when `commands` holds anything but such sequences
+    pub fn write_terminal_graphics(&self, commands: String) -> bool {
+        if !is_kitty_graphics(&commands) {
+            return false;
+        }
+        self.command_sender
+            .send(PluginCommand::WriteTerminalGraphics { commands })
+            .is_ok()
     }
 
     #[plugin_api(section = "Clipboard")]
@@ -5014,6 +5054,8 @@ impl JsEditorApi {
     /// rendering — the line containing `start - 1` (the fold "header")
     /// stays visible, while subsequent lines covered by the range are
     /// skipped.
+    /// The header shows `placeholder` after its text (`...` without one;
+    /// an empty string shows nothing).
     pub fn add_fold(
         &self,
         buffer_id: u32,
@@ -5573,6 +5615,9 @@ impl JsEditorApi {
     ///     `fg`/`bg`. Falls back to the theme's line-number fg.
     ///   * `composeOnly` — `true` draws the line only in a pane showing the
     ///     buffer in compose view, and hides it in every other pane.
+    ///   * `clip` — `true` keeps the line on one row, cut at the pane's
+    ///     edge, instead of soft-wrapping it: for a rule or a band drawn
+    ///     the width of the pane (give it more text than any pane is wide).
     ///
     /// @param position - Byte position to anchor the virtual line to
     /// @param above - Whether to insert above (true) or below (false) the line
@@ -5617,6 +5662,7 @@ impl JsEditorApi {
             .filter(|s| !s.is_empty());
         let gutter_color = parse_color_spec("gutterColor", &options);
         let compose_only: bool = options.get("composeOnly").unwrap_or(false);
+        let clip: bool = options.get("clip").unwrap_or(false);
         // The buffer version `position` was computed against: the epoch of the
         // hook this handler is running in, auto-stamped by the runtime. Lets the
         // editor remap a stale anchor forward before placing the line.
@@ -5661,6 +5707,7 @@ impl JsEditorApi {
                 text_overlays,
                 epoch,
                 compose_only,
+                clip,
             })
             .is_ok())
     }
@@ -6668,6 +6715,19 @@ impl JsEditorApi {
             .is_ok()
     }
 
+    /// Name a buffer's tab: what it says instead of the file's name (a
+    /// notebook's working copy shown as the notebook). `null` gives the tab
+    /// its file's name back.
+    #[qjs(rename = "setBufferTabLabel")]
+    pub fn set_buffer_tab_label(&self, buffer_id: u32, label: Option<String>) -> bool {
+        self.command_sender
+            .send(PluginCommand::SetBufferTabLabel {
+                buffer_id: BufferId(buffer_id as usize),
+                label,
+            })
+            .is_ok()
+    }
+
     #[plugin_api(section = "Languages & LSP")]
     /// Choose the grammar a virtual buffer is highlighted with.
     ///
@@ -7581,6 +7641,29 @@ impl JsEditorApi {
     pub fn register_lsp_uri_scheme(&self, scheme: String) -> bool {
         self.command_sender
             .send(PluginCommand::RegisterLspUriScheme { scheme })
+            .is_ok()
+    }
+
+    #[plugin_api(section = "Completion")]
+    /// Offer completions for a buffer: from now on the editor's completion requests on it (Ctrl+Space,
+    /// or while typing when the popup shows by itself) fire the `completion_requested` hook, which
+    /// the plugin answers with `supplyCompletions`; its items join the LSP's in the popup. Typing one
+    /// of `triggerCharacters` (e.g. ".") asks at once.
+    pub fn register_completion_source(&self, buffer_id: u32, trigger_characters: String) -> bool {
+        self.command_sender
+            .send(PluginCommand::RegisterCompletionSource {
+                buffer_id: BufferId(buffer_id as usize),
+                trigger_characters,
+            })
+            .is_ok()
+    }
+
+    /// Answer a `completion_requested` hook (an empty list is an answer too: the popup then
+    /// shows the other sources alone). Answers to a request the editor has moved on from are
+    /// dropped.
+    pub fn supply_completions(&self, request_id: u64, items: Vec<PluginCompletionItem>) -> bool {
+        self.command_sender
+            .send(PluginCommand::SupplyCompletions { request_id, items })
             .is_ok()
     }
 
@@ -11660,6 +11743,25 @@ mod tests {
     }
 
     // ==================== API Tests ====================
+
+    #[test]
+    fn kitty_graphics_commands_and_nothing_else() {
+        assert!(is_kitty_graphics("\x1b_Ga=t,f=100,i=7,q=2;iVBOR\x1b\\"));
+        assert!(is_kitty_graphics(
+            "\x1b_Ga=t,m=1;AAAA\x1b\\\x1b_Gm=0;BBBB\x1b\\"
+        ));
+        for bad in [
+            "",
+            "plain text",
+            "\x1b_Ga=t;AAAA",            // unterminated
+            "\x1b]52;c;aGk=\x07",        // another escape
+            "\x1b_Ga=t;AA\x1b\\\x1b[2J", // a trailing escape
+            "\x1b_Ga=t;A\x1b[2JA\x1b\\", // an escape inside
+            "x\x1b_Ga=t;AAAA\x1b\\",     // text before
+        ] {
+            assert!(!is_kitty_graphics(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn test_api_set_status() {

@@ -5759,7 +5759,13 @@ impl Editor {
             Some(crate::app::types::HoverTarget::NewTabButton(pane)) => Some(*pane),
             _ => None,
         };
-        self.active_window().pane_strips(chrome, hover, hover_plus)
+        let mut strips = self.active_window().pane_strips(chrome, hover, hover_plus);
+        if self.config.editor.chrome_style.is_herdr() {
+            for s in strips.values_mut() {
+                s.herdr = true;
+            }
+        }
+        strips
     }
 
     /// Each visible pane's leaf handle, for the frame's description — the
@@ -5872,7 +5878,12 @@ impl Editor {
             hscroll: false,
         });
         let groups = win.pane_groups();
-        let strips = win.pane_strips(&chrome, None, None);
+        let mut strips = win.pane_strips(&chrome, None, None);
+        if self.config.editor.chrome_style.is_herdr() {
+            for s in strips.values_mut() {
+                s.herdr = true;
+            }
+        }
         let rowless: std::collections::HashSet<_> = groups.keys().copied().collect();
         let hosts = win.pane_hosts(&rowless);
         Some(std::rc::Rc::new(Splits {
@@ -6123,6 +6134,24 @@ impl Editor {
         }
     }
 
+    /// The `{mode}` badge's text: the surface that has the keyboard, or the
+    /// plugin mode over the editor (`notebook`, vi's), else `EDIT`.
+    fn mode_badge(&self) -> String {
+        use crate::input::keybindings::KeyContext;
+        let label = match self.key_context_as_laid_out() {
+            KeyContext::Prompt => "prompt",
+            KeyContext::SearchPrompt => "search",
+            KeyContext::FileExplorer => "explorer",
+            KeyContext::Menu => "menu",
+            KeyContext::Terminal => "terminal",
+            KeyContext::Settings => "settings",
+            KeyContext::CompositeBuffer => "diff",
+            KeyContext::Mode(m) => return m.replace(['-', '_'], " ").to_uppercase(),
+            _ => self.effective_mode().unwrap_or("edit"),
+        };
+        label.replace(['-', '_'], " ").to_uppercase()
+    }
+
     pub(crate) fn panel_description(&self) -> Option<crate::view::shell::panel::Panel> {
         use crate::view::shell::panel::{Panel, Spot};
 
@@ -6293,6 +6322,7 @@ impl Editor {
                 resumes_agent: e.resumes_agent() && self.config.terminal.resume_agents,
             }
         });
+        let mode = self.mode_badge();
         // A field-level borrow, disjoint from the `self.windows` borrow below.
         let keybindings_guard = self.keybindings.read().unwrap();
         let keybindings = &*keybindings_guard;
@@ -6342,6 +6372,7 @@ impl Editor {
                     dynamic_status_bar_elements,
                     workspace_trust_level,
                     terminal_restart,
+                    mode,
                 };
 
                 let left = StatusBarRenderer::render_side(&config.left, &mut status_ctx);

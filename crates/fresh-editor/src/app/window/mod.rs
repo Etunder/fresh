@@ -2306,7 +2306,10 @@ impl Window {
                 state
                     .overlays
                     .clear_namespace(diagnostic_namespace, &mut state.marker_list);
-                state.virtual_texts.clear(&mut state.marker_list);
+                state.virtual_texts.clear_namespace(
+                    &mut state.marker_list,
+                    &crate::view::virtual_text::VirtualTextNamespace::inlay_hints(),
+                );
                 state.folding_ranges.clear(&mut state.marker_list);
                 for view_state in vs_map.values_mut() {
                     if let Some(buf_state) = view_state.buffer_state_mut(buffer_id) {
@@ -2996,6 +2999,7 @@ impl Window {
                     hover_plus: hover_plus == Some(leaf),
                     reveal: Some(self.tab_reveal_for(leaf)),
                     preview_label: preview_label.clone(),
+                    herdr: false,
                 },
             );
         }

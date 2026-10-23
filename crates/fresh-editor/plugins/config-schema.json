@@ -22,20 +22,14 @@
       "default": null
     },
     "check_for_updates": {
-      "description": "Check for new versions on startup (default: true).\nAlso sends basic anonymous telemetry (version, OS, terminal type).",
+      "description": "Check for new versions on startup (default: false in this fork: the check asks upstream\nFresh, whose releases are not this build, and sends basic anonymous telemetry).",
       "type": "boolean",
-      "default": true
+      "default": false
     },
     "self_update": {
-      "description": "Offer to update from inside the editor when a new version is found (default: true).\nWhen off, the status-bar indicator only tells you an update exists.\nNeeds `check_for_updates` and an install method that can self-update.",
+      "description": "Offer to update from inside the editor when a new version is found (default: false in\nthis fork, which is built without self-update: updating would replace it with upstream).",
       "type": "boolean",
-      "default": true
-    },
-    "orchestrator_mode": {
-      "description": "When on (default), `fresh` with no arguments reattaches to a single background\neditor with the workspace dock and your last workspace. When off, it opens a\nplain editor in the current directory; runs with files or flags are unaffected.",
-      "type": "boolean",
-      "default": true,
-      "x-order": 1
+      "default": false
     },
     "editor": {
       "description": "Editor behavior settings (indentation, line numbers, wrapping, etc.)",
@@ -56,6 +50,7 @@
         "page_width": 80,
         "syntax_highlighting": true,
         "show_menu_bar": true,
+        "chrome_style": "fresh",
         "screensaver_enabled": false,
         "screensaver_idle_minutes": 5,
         "menu_bar_mnemonics": true,
@@ -523,6 +518,12 @@
           "description": "Show the menu bar (File, Edit, View, …) at the top. Can be toggled at any time.\nDefault: true",
           "type": "boolean",
           "default": true,
+          "x-section": "Display"
+        },
+        "chrome_style": {
+          "description": "Layout of the tab bar, status bar and file explorer. \"fresh\": Fresh's own. \"herdr\": like\nthe herdr multiplexer (tab chips, close mark on hover, mode-bar status line).\nDefault: \"fresh\"; the herdr edition ships \"herdr\".",
+          "$ref": "#/$defs/ChromeStyle",
+          "default": "fresh",
           "x-section": "Display"
         },
         "screensaver_enabled": {
@@ -1051,6 +1052,15 @@
         }
       }
     },
+    "ChromeStyle": {
+      "description": "How the editor's chrome is laid out",
+      "type": "string",
+      "enum": [
+        "fresh",
+        "herdr"
+      ],
+      "default": "fresh"
+    },
     "StatusBarConfig": {
       "description": "Which elements appear in the status bar, split into a left and a right\ngroup. Elements can be freely reordered.\n\nExample: `{\"left\": [\"{filename}\", \"{cursor:compact}\"], \"right\": [\"{language}\", \"{encoding}\"]}`",
       "type": "object",
@@ -1180,6 +1190,10 @@
         {
           "value": "{trust}",
           "name": "Workspace Trust"
+        },
+        {
+          "value": "{mode}",
+          "name": "Mode"
         }
       ]
     },

@@ -1508,6 +1508,7 @@
   "settings.option.clock": "Đồng hồ",
   "settings.option.remote": "Chỉ báo từ xa",
   "settings.option.trust": "Tin cậy không gian làm việc",
+  "settings.option.mode": "Chế độ",
   "settings.editing_config": "Đang chỉnh sửa cấu hình %{layer}: %{path}",
   "settings.failed_to_apply": "Áp dụng cài đặt thất bại: %{error}",
   "settings.failed_to_open": "Mở cài đặt thất bại: %{error}",

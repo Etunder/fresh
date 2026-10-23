@@ -8,7 +8,6 @@ pub mod blog_showcase;
 pub mod daemon;
 #[cfg(test)]
 #[allow(dead_code)]
-pub mod dormant_ssh;
 #[cfg(test)]
 #[allow(dead_code)]
 pub mod explorer;

@@ -679,6 +679,7 @@ impl Editor {
             command_registry: parts.command_registry,
             quick_open_registry: parts.quick_open_registry,
             lsp_uri_schemes: std::collections::HashSet::new(),
+            plugin_completion_sources: std::collections::HashMap::new(),
             plugin_manager: parts.plugin_manager,
             recovery_service: parts.recovery_service,
             mouse_capture: parts.mouse_capture,

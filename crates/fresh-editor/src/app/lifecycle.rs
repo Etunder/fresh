@@ -108,6 +108,16 @@ impl Editor {
         self.pending_escape_sequences.extend_from_slice(sequences);
     }
 
+    /// Queue kitty graphics commands from a plugin. Unlike the cursor style these go through the
+    /// queue in direct mode too (drained before each frame), and a frontend that never drains it
+    /// (the GUI) stops taking more once it holds 32 MiB.
+    pub fn queue_terminal_graphics(&mut self, commands: &[u8]) {
+        const LIMIT: usize = 32 << 20;
+        if self.pending_escape_sequences.len() + commands.len() <= LIMIT {
+            self.queue_escape_sequences(commands);
+        }
+    }
+
     /// Take pending escape sequences, clearing the queue
     pub fn take_pending_escape_sequences(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pending_escape_sequences)

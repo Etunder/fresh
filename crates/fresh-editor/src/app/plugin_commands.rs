@@ -567,6 +567,7 @@ impl Editor {
         text_overlays: Vec<fresh_core::api::VirtualLineTextOverlay>,
         epoch: Option<u64>,
         compose_only: bool,
+        clip: bool,
     ) {
         use crate::view::theme::named_color_from_str;
         use crate::view::virtual_text::{VirtualTextNamespace, VirtualTextPosition};
@@ -645,6 +646,7 @@ impl Editor {
                 gutter_color_fallback,
                 text_overlays,
                 compose_only,
+                clip,
             );
         }
     }

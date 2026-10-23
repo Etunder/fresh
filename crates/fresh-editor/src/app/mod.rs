@@ -59,6 +59,8 @@ mod mouse_input;
 #[cfg(feature = "web")]
 pub(crate) mod native_panels;
 mod navigation;
+mod notebook_edit;
+mod notebook_edit_policy;
 mod on_save_actions;
 mod orchestrator_persistence;
 mod overlay;
@@ -1018,6 +1020,10 @@ pub struct Editor {
     /// Keeps synthetic-document handling (slangd's `slang-synth://`, jdtls's
     /// `jdt://`, …) out of the core: the core only dispatches by scheme.
     pub(crate) lsp_uri_schemes: std::collections::HashSet<String>,
+
+    /// Buffers a plugin offers completions for (`registerCompletionSource`), with the characters
+    /// that ask for them at once. Their requests go out as the `completion_requested` hook.
+    pub(crate) plugin_completion_sources: std::collections::HashMap<BufferId, String>,
 
     /// Plugin manager (handles both enabled and disabled cases)
     /// Plugin manager, wrapped in `Arc<RwLock<>>` so windows can fire

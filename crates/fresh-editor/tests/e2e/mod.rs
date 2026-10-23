@@ -41,12 +41,10 @@ pub mod deno_lsp_plugin;
 pub mod dispatch_precedence;
 pub mod dock_create_terminal_resize;
 #[cfg(feature = "plugins")]
-pub mod dock_dropdown_mouse;
 #[cfg(feature = "plugins")]
 pub mod dock_focus_stuck_born_attached;
 pub mod dock_panel_routing;
 #[cfg(feature = "plugins")]
-pub mod dock_switch_wipes_outgoing_window;
 pub mod document_model;
 pub mod duplicate_line_above;
 pub mod emacs_actions;
@@ -279,14 +277,6 @@ pub mod multicursor;
 pub mod occurrence_highlight;
 pub mod on_save_actions;
 pub mod open_folder;
-pub mod orchestrator_dialog_trust_repro;
-pub mod orchestrator_dock;
-pub mod orchestrator_dock_settings;
-pub mod orchestrator_dock_startup;
-pub mod orchestrator_dock_width;
-pub mod orchestrator_external_sessions;
-pub mod orchestrator_new_workspace_open_file;
-pub mod orchestrator_window_lsp;
 pub mod overlay_extend_to_line_end;
 pub mod pane_navigation;
 #[cfg(feature = "plugins")]

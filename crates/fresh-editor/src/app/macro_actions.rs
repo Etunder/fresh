@@ -244,6 +244,7 @@ impl Editor {
                 mode: "macro-view".to_string(),
             },
             display_name: format!("*Macro {}*", key),
+            tab_label: None,
             lsp_enabled: false,
             lsp_disabled_reason: Some("Virtual macro buffer".to_string()),
             read_only: false, // Allow editing for saving
@@ -329,6 +330,7 @@ impl Editor {
                 mode: "macro-list".to_string(),
             },
             display_name: "*Macros*".to_string(),
+            tab_label: None,
             lsp_enabled: false,
             lsp_disabled_reason: Some("Virtual macro list buffer".to_string()),
             read_only: true,

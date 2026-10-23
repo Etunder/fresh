@@ -260,6 +260,8 @@ pub struct StatusBarContext<'a> {
     /// renders only in that state. `None` for every other buffer — including a
     /// live terminal, so the indicator never offers to restart a running agent.
     pub terminal_restart: Option<TerminalRestartState>,
+    /// What has the keyboard, already upper-cased for the `{mode}` badge.
+    pub mode: String,
 }
 
 /// What the `{terminal_restart}` indicator needs to describe the dead process
@@ -819,6 +821,13 @@ impl StatusBarRenderer {
                     Hover::Underline,
                 )
             }
+            StatusBarElement::Mode => {
+                // herdr's mode badge: the panel colour on the accent, bold —
+                // the same pair as the active tab chip.
+                let mut it = item(ctx.mode.clone(), "mode", MODE, None, hovered)?;
+                it.runs[0].1 = Ink::keys(MODE.0, MODE.1).plus(Attrs::BOLD).to_string();
+                Some(it)
+            }
             StatusBarElement::CustomToken(key) => {
                 let value = ctx.dynamic_status_bar_elements.get(key)?;
                 let mut it = item(value.clone(), "plugin", BAR, None, hovered)?;
@@ -853,6 +862,8 @@ const ERROR: Keys = (
     "ui.status_error_indicator_fg",
     "ui.status_error_indicator_bg",
 );
+/// The `{mode}` badge, on the active tab's keys so it reads as the same accent chip.
+const MODE: Keys = ("ui.tab_active_fg", "ui.tab_active_bg");
 const MENU_HOVER: Keys = ("ui.menu_hover_fg", "ui.menu_hover_bg");
 /// The palette hint, on keys of its own so a theme can repaint it without
 /// breaking the bar's colour band (#1711).

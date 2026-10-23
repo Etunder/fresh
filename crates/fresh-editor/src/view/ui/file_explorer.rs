@@ -159,7 +159,7 @@ pub fn describe_row(d: RowDesc<'_>) -> crate::view::shell::file_explorer::Row {
         } else {
             ("! ".to_string(), 2)
         };
-        left.push((glyph, pair("diagnostic.warning_fg", ground)));
+        left.push((glyph, pair("ui.explorer_toggle_fg", ground)));
         let pad = indicator_width.saturating_sub(w);
         if pad > 0 {
             left.push((" ".repeat(pad), pair(neutral, ground)));
@@ -194,7 +194,7 @@ pub fn describe_row(d: RowDesc<'_>) -> crate::view::shell::file_explorer::Row {
             };
             fe::ChainPart {
                 runs: vec![
-                    (seg.name.clone(), pair("syntax.keyword", ground)),
+                    (seg.name.clone(), pair("ui.explorer_directory_fg", ground)),
                     ("/".to_string(), pair("editor.line_number_fg", ground)),
                 ],
                 path: seg.path.clone(),

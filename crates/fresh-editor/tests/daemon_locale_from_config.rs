@@ -67,7 +67,7 @@ fn setup(home: &Path, locale: Option<&str>) {
         .unwrap_or_default();
     std::fs::write(
         config_dir.join("config.json"),
-        format!("{{\n{locale}  \"check_for_updates\": false\n}}\n"),
+        format!("{{\n{locale}  \"check_for_updates\": false,\n  \"editor\": {{\"show_menu_bar\": true}}\n}}\n"),
     )
     .unwrap();
 }

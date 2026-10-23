@@ -1004,6 +1004,11 @@ pub struct VirtualLineTextOverlay {
     pub bold: bool,
     #[serde(default)]
     pub underline: bool,
+    /// Foreground for the range, over the line's own: `[r, g, b]` or a theme key (a notebook's
+    /// output keeps the colours its program printed in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fg: Option<TokenColor>,
 }
 
 impl OverlayColorSpec {
@@ -3863,6 +3868,10 @@ pub enum PluginCommand {
     /// Set status message
     SetStatus { message: String },
 
+    /// Kitty graphics protocol commands (`ESC _ G … ESC \`), written to the terminal ahead of the
+    /// next frame. Already checked to hold nothing else.
+    WriteTerminalGraphics { commands: String },
+
     /// Apply a theme by name
     ApplyTheme { theme_name: String },
 
@@ -4424,6 +4433,10 @@ pub enum PluginCommand {
         /// rendering (markdown compose's frames, rendered blocks).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         compose_only: bool,
+        /// Keep the line on one row, cut at the pane's edge, instead of
+        /// soft-wrapping it (a rule or band drawn the width of the pane).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        clip: bool,
     },
 
     /// Clear all virtual texts in a namespace
@@ -5401,6 +5414,11 @@ pub enum PluginCommand {
     /// buffer (e.g. for magit-style row navigation) flip this to `true` after
     /// `createBufferGroup` returns.
     SetBufferShowCursors { buffer_id: BufferId, show: bool },
+    /// Name a buffer's tab (`None`: its file's name again).
+    SetBufferTabLabel {
+        buffer_id: BufferId,
+        label: Option<String>,
+    },
     /// Pick a virtual buffer's grammar by name. `name` is resolved the
     /// same way a virtual buffer's own name is, so an extension in it
     /// (`"stream.diff"`) selects the grammar.
@@ -5686,6 +5704,20 @@ pub enum PluginCommand {
     RegisterLspUriScheme {
         /// The scheme to claim, without the `://` (e.g. `slang-synth`).
         scheme: String,
+    },
+
+    /// Offer completions for a buffer: the editor's completion requests on it fire the
+    /// `completion_requested` hook, answered with `SupplyCompletions`. Typing one of
+    /// `trigger_characters` asks at once.
+    RegisterCompletionSource {
+        buffer_id: BufferId,
+        trigger_characters: String,
+    },
+
+    /// A plugin's answer to a `completion_requested` hook.
+    SupplyCompletions {
+        request_id: u64,
+        items: Vec<PluginCompletionItem>,
     },
 
     /// Mark the buffer backing `path` read-only. Resolved by path (not
@@ -6719,6 +6751,29 @@ impl AddMenuItemOptions {
     }
 }
 
+/// One completion a plugin offers for a buffer it registered with `registerCompletionSource`,
+/// shown in the editor's completion popup beside the LSP's. `label` is the word that replaces the
+/// one at the cursor (unless `insertText` says otherwise), and what the typed prefix filters on.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(export, rename_all = "camelCase")]
+pub struct PluginCompletionItem {
+    pub label: String,
+    /// Shown greyed beside the label (a type or signature).
+    #[serde(default)]
+    #[ts(optional)]
+    pub detail: Option<String>,
+    /// The row's icon: "function", "method", "variable", "class", "module", "keyword",
+    /// "property", "instance" (anything else shows none).
+    #[serde(default)]
+    #[ts(optional)]
+    pub kind: Option<String>,
+    /// What is inserted in place of the word at the cursor, if not `label`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub insert_text: Option<String>,
+}
+
 /// Options for showActionPopup
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -7592,6 +7647,7 @@ mod fromjs_impls {
         ActionSpec,
         ActionPopupAction,
         ActionPopupOptions,
+        PluginCompletionItem,
         AddMenuItemOptions,
         LspMenuItem,
         ViewTokenWire,

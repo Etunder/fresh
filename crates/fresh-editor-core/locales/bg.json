@@ -2100,6 +2100,7 @@
   "settings.option.clock": "Часовник",
   "settings.option.remote": "Отдалечен достъп",
   "settings.option.trust": "Доверие в работната област",
+  "settings.option.mode": "Режим",
   "settings.help_footer": "Tab:Следващ бутон  Enter:Активиране  Esc:Затваряне",
   "settings.help_search": "Въведете за търсене, ↑↓:Навигация  Enter:Преминаване  Esc:Отказ",
   "settings.inherited_badge": "(Наследено)",

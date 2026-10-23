@@ -41,13 +41,12 @@ const editor = getEditor();
 //
 //   Everything here is built from the existing plugin surface — a
 //   virtual buffer with a mounted widget panel (the same pairing
-//   `search_replace.ts` uses), the widget library's own controls, and
-//   the orchestrator's exported API. No new host mechanism.
+//   `search_replace.ts` uses), the widget library's own controls. No
+//   new host mechanism.
 //
 //   The demos are real rather than illustrated: the finder runs over
 //   `git ls-files`, the theme buttons call `applyTheme`, the git card
-//   reads `git status`, and the workspace rows come from
-//   `getPluginApi("orchestrator").listWorkspaces()`.
+//   reads `git status`.
 // ═════════════════════════════════════════════════════════════════════
 
 const C = {
@@ -141,15 +140,6 @@ function statusFg(xy: string): string {
 
 type FinderItem = { path: string };
 
-type Workspace = {
-  name: string;
-  branch: string;
-  agentState: string;
-  kind: string;
-  active: boolean;
-  windowId: number;
-};
-
 let bufferId: number | null = null;
 let panel: WidgetPanel | null = null;
 let opening = false;
@@ -194,8 +184,6 @@ function readActiveTheme(): void {
 let gitDirty: string[] = [];
 let gitBranch = "";
 let gitProbed = false;
-
-let workspaces: Workspace[] = [];
 
 /** Best-effort proxy for "which widget has focus", mirrored from
  *  `widget_event`. The welcome buffer is a document first, so Up/Down
@@ -254,7 +242,7 @@ let outlineSelected = "";
 const LEVEL_MARK: Record<string, string> = {
   "1": "LEVEL 1 · JUST EDIT",
   "2": "LEVEL 2 · IT'S A PROJECT NOW",
-  "3": "LEVEL 3 · MANY TASKS AT ONCE",
+  "3": "LEVEL 3 · GOING FURTHER",
 };
 
 // ── Small helpers ────────────────────────────────────────────────────
@@ -570,7 +558,7 @@ function card(
  *  and sit it on the page's axis.
  *
  *  A box drawn to the full measure is mostly empty: the finder's paths,
- *  the git card's file names and the workspace rows are all short, so
+ *  the git card's file names are all short, so
  *  the frame ran forty columns past its own content and the card read
  *  as a room rather than a card. Prose still sets to the full measure —
  *  it is the *frames* that were too wide, not the page.
@@ -700,11 +688,11 @@ function hero(): WidgetSpec[] {
     ? "A terminal text editor and IDE. It opens instantly and grows into an IDE."
     : "A terminal text editor and IDE.";
   return [
-    // The two switches ride the top edge, above the mark: a control for
+    // The switch rides the top edge, above the mark: a control for
     // "I don't want this screen" belongs where someone who doesn't want
-    // the screen looks first, and putting them above the wordmark keeps
+    // the screen looks first, and putting it above the wordmark keeps
     // the mark the first thing *read*.
-    ...orchestratorRow(),
+    ...topRow(),
     blank(),
     ...art,
     ...air(2),
@@ -730,50 +718,14 @@ function chipsRow(): WidgetSpec {
   return centred(segs);
 }
 
-/** The orchestrator switch: the page's first row, and the first thing
- *  on it.
+/** The page's first row: the startup switch, on the right.
  *
- *  It sits above the mark, alone and left-aligned, because it is the one
- *  control here that decides what `fresh` *is* on the next launch —
- *  whether typing `fresh` reopens the workspace you were in or opens an
- *  editor on the directory you happen to be standing in. Everything else
- *  on this page teaches; this one thing acts, so it goes where the eye
- *  lands first rather than into a settings dialog the reader does not
- *  know exists yet.
- *
- *  Paired with, not merged into, the startup toggle on the right: they
- *  read as one row of switches but mean different things — this one
- *  governs the editor, that one governs this page. */
-function orchestratorRow(): WidgetSpec[] {
-  // The page's first row says so itself, rather than the outline naming a
-  // key from a table: a table is a string that has to match a widget key
-  // defined somewhere else, and `scrollToWidget` on a key that no longer
-  // exists does nothing at all — a silent first row in the Contents
-  // section, which is exactly what building the outline as the page is
-  // built exists to rule out.
-  outline.push({ label: "Top of the page", key: "orchestratorToggle", depth: 0 });
-  const on = orchestratorMode();
-  const label = `${on ? "[✓]" : "[ ]"} Open in the orchestrator`;
-  return [
-    row(
-      button(label, {
-        key: "orchestratorToggle",
-        bare: true,
-        style: LINK,
-        hoverStyle: HOVER_LINK,
-      }),
-      flexSpacer(),
-      startupToggle(),
-    ),
-    centred([
-      {
-        text: on
-          ? "`fresh` reopens your last workspace in a background daemon."
-          : "`fresh` opens a plain editor here, in this terminal.",
-        style: { fg: C.muted, italic: true },
-      },
-    ]),
-  ];
+ *  The page's first row says so itself, rather than the outline naming a
+ *  key from a table: `scrollToWidget` on a key that no longer exists does
+ *  nothing at all, so the outline entry is pushed where the row is built. */
+function topRow(): WidgetSpec[] {
+  outline.push({ label: "Top of the page", key: "startupToggle", depth: 0 });
+  return [row(flexSpacer(), startupToggle())];
 }
 
 /** The startup switch, the right-hand half of the page's top row.
@@ -782,9 +734,7 @@ function orchestratorRow(): WidgetSpec[] {
  *  but a button can say what it does under the pointer and a toggle
  *  cannot.
  *
- *  Returns the button alone. It used to own its whole row, and pairing it
- *  with the orchestrator switch meant either nesting a full-width row
- *  inside another or letting the two compete for the same edge. */
+ *  Returns the button alone; `topRow` places it. */
 function startupToggle(): WidgetSpec {
   const on = showOnStartup();
   const label = `${on ? "[✓]" : "[ ]"} Show this screen on startup`;
@@ -815,9 +765,9 @@ const DOORS: Door[] = [
   },
   {
     n: "3",
-    head: "[3] ORCHESTRATE",
-    sub: "Run agents in parallel",
-    body: "One worktree per task. claude, codex, aider and remotes. Tour the diffs.",
+    head: "[3] GO FURTHER",
+    sub: "Tours, scripts, remotes",
+    body: "Walk through a change in a tour, drive the editor with a script, edit over SSH.",
   },
 ];
 
@@ -1514,88 +1464,9 @@ function themeCard(): WidgetSpec {
 
 // ── Level 3 ──────────────────────────────────────────────────────────
 
-/** Idle is a healthy state. It used to be painted `syntax.constant`
- *  amber, which told the reader something was wrong. */
-function stateGlyph(w: Workspace): { text: string; fg: string } {
-  if (w.kind === "discovered") return { text: "○", fg: C.muted };
-  if (w.agentState === "working") return { text: "●", fg: C.ok };
-  return { text: "◐", fg: C.muted };
-}
-
-function orchestratorCard(): WidgetSpec {
-  return card("orch", "The Orchestrator dock", "your workspaces", () => {
-    const rows: WidgetSpec[] = [blank()];
-    if (workspaces.length === 0) {
-      rows.push(...bodyText("No workspaces yet. Cut one and an agent starts inside it.", C.muted));
-    } else {
-      for (const w of workspaces.slice(0, 6)) {
-        const g = stateGlyph(w);
-        rows.push(
-          row(
-            spacer(2),
-            line([{ text: g.text, style: { fg: g.fg } }]),
-            spacer(1),
-            button(w.name, {
-              key: `ws:${w.windowId}`,
-              bare: true,
-              style: LINK,
-              hoverStyle: HOVER_LINK,
-            }),
-            flexSpacer(),
-            line([{ text: w.branch, style: { fg: C.muted } }]),
-            spacer(2),
-          ),
-        );
-      }
-      rows.push(blank());
-      rows.push(
-        line([
-          { text: "  ● working   ", style: { fg: C.ok } },
-          { text: "◐ idle   ", style: { fg: C.muted } },
-          { text: "○ discovered worktree", style: { fg: C.muted } },
-        ]),
-      );
-    }
-    rows.push(blank());
-    // The first two are the Orchestrator's own handlers. Offer them only
-    // when that plugin is actually loaded — a button whose action no
-    // plugin defines fails silently in the log, which is worse than an
-    // absent button. `Open the dock` is a built-in action and always
-    // holds.
-    const orchLoaded = editor.getPluginApi("orchestrator") !== null;
-    const actions: WidgetSpec[] = [spacer(2)];
-    if (orchLoaded) {
-      actions.push(
-        button("New workspace…", { key: "act_ws_new", hoverStyle: GLOW }),
-        spacer(2),
-        button("Run agent here…", { key: "act_ws_agent", hoverStyle: GLOW }),
-        spacer(2),
-      );
-    }
-    actions.push(button("Open the dock", { key: "act_ws_dock", hoverStyle: GLOW }));
-    rows.push(row(...actions));
-    rows.push(blank());
-    rows.push(
-      ...bodyText("One workspace per git worktree, each with its own tabs, terminals and agent. Arrow keys switch between them; nothing is shut down when you leave."),
-      blank(),
-      ...cardBullets([
-        "Run Agent… starts claude, codex, opencode, aider, or any command.",
-        "New Workspace can make the worktree and branch for you.",
-        "The dock shows each one's branch, git status and PR.",
-      ]),
-      blank(),
-      ...bodyText("Agents that support it rejoin their conversation after a restart.", C.muted),
-    );
-    rows.push(blank());
-    return rows;
-  }, true);
-}
-
 function level3(): WidgetSpec[] {
   return [
-    banner("3", "A worktree per task, an agent in each, and the editor driven from outside."),
-    orchestratorCard(),
-    blank(),
+    banner("3", "Tours, scripting, and the editor on other machines."),
     card("tours", "Code tours", "a walkthrough, in a panel", () => [
       blank(),
       bullet("A tour plays in a panel: the steps on the left, the current step's text on the right, and the file it points at open above, scrolled to the lines it is about."),
@@ -1619,7 +1490,7 @@ function level3(): WidgetSpec[] {
       plain("  echo 'return editor.splitWindow({ file: \"src/main.rs\" })' \\", C.value),
       plain("    | fresh --cmd script run", C.value),
       blank(),
-      bullet("A few lines of TypeScript can do anything a plugin can: open files, arrange panes, make a workspace, start an agent, open a tour."),
+      bullet("A few lines of TypeScript can do anything a plugin can: open files, arrange panes, run commands, open a tour."),
       bullet("The script prints its answer as JSON and exits. Whatever it opened stays open."),
       bullet("So a build script can put a failing line on screen, and an agent can show you its work instead of describing it."),
       blank(),
@@ -2122,63 +1993,12 @@ function probeThemes(): void {
   themeNames = names;
 }
 
-type OrchestratorApi = {
-  listWorkspaces?: () => Array<Record<string, unknown>>;
-  focusWorkspace?: (id: number) => unknown;
-};
-
-function probeWorkspaces(): void {
-  try {
-    const api = editor.getPluginApi("orchestrator") as OrchestratorApi | null;
-    if (!api?.listWorkspaces) return;
-    const rows = api.listWorkspaces();
-    workspaces = rows.map((r) => ({
-      name: String(r.name ?? ""),
-      branch: String(r.branch ?? ""),
-      agentState: String(r.agentState ?? "idle"),
-      kind: String(r.kind ?? "live"),
-      active: r.active === true,
-      windowId: typeof r.windowId === "number" ? r.windowId : 0,
-    }));
-  } catch (_e) {
-    workspaces = [];
-  }
-}
-
 // ── Config ───────────────────────────────────────────────────────────
 
 editor.defineConfigBoolean("showOnStartup", {
   default: true,
   description: "Open the welcome screen when Fresh starts, as a tab behind whatever is already open.",
 });
-
-/** What this page last asked orchestrator mode to become, while the
- *  editor is still catching up.
- *
- *  `saveSetting` is queued, not immediate, so the repaint that follows a
- *  click still reads the old value out of the config snapshot — the box
- *  would stay `[✓]` after being switched off and only right itself on
- *  some later repaint. Holding the asked-for value here bridges exactly
- *  that gap, and `orchestratorMode` drops it the moment the snapshot
- *  agrees, so the config stays the authority rather than this variable. */
-let orchestratorPending: boolean | null = null;
-
-/** Orchestrator mode, read from the *core* config rather than this
- *  plugin's own settings: it is one switch that governs the whole
- *  launch — daemon, dock, which workspace comes back — and the welcome
- *  page is one of several places that shows it, not its owner. On by
- *  default, so an unset value reads as on. */
-function orchestratorMode(): boolean {
-  const cfg = (editor.getConfig() ?? {}) as { orchestrator_mode?: boolean };
-  const live = cfg.orchestrator_mode !== false;
-  if (orchestratorPending === null) return live;
-  if (orchestratorPending === live) {
-    // The write landed; the config is the authority again.
-    orchestratorPending = null;
-    return live;
-  }
-  return orchestratorPending;
-}
 
 /** The footer toggle writes plugin global state, which persists across
  *  restarts; the declared config field is the fallback, so the Settings
@@ -2268,7 +2088,6 @@ async function openWelcome(force: boolean): Promise<void> {
     editor.setBufferShowCursors(bufferId, true);
     applyComposeWidth();
     probeThemes();
-    probeWorkspaces();
     render();
     // No section yet. The page is created as a *background* tab at
     // startup, and an outline of a page nobody is looking at would sit
@@ -2392,21 +2211,8 @@ registerHandler("welcomeOnBufferActivated", (e: { buffer_id: number }) => {
   // is the recovery.
   mountContents(false);
   editor.setTimeout(0, "welcomeCatchUpOnShow");
-  void loadWorkspacesForPage();
 });
 
-// The page lists your workspaces, but it opens as a background tab on every
-// launch — reading the whole workspace registry for a page nobody is looking
-// at would cost every launch. So the list starts as what the editor already
-// has, and the rest is asked for the first time the page is actually shown.
-let workspacesRequested = false;
-async function loadWorkspacesForPage(): Promise<void> {
-  if (workspacesRequested) return;
-  workspacesRequested = true;
-  await editor.loadWorkspaces();
-  probeWorkspaces();
-  render();
-}
 registerHandler("welcomeCatchUpOnShow", async () => {
   if (bufferId === null || editor.getActiveBufferId() !== bufferId) return;
   paneWidth = 0;
@@ -2685,12 +2491,6 @@ function activateKey(k: string): void {
     render();
     return;
   }
-  if (k.startsWith("ws:")) {
-    const id = Number(k.slice(3));
-    const api = editor.getPluginApi("orchestrator") as OrchestratorApi | null;
-    api?.focusWorkspace?.(id);
-    return;
-  }
   if (k === "ui_contents") {
     // Mount it if the reader closed it, raise it either way, and put the
     // keyboard in it — the whole reason this button exists is that a
@@ -2790,34 +2590,6 @@ function activateKey(k: string): void {
       // the log rather than on screen — so the name has to be right.
       editor.executeAction("show_git_log");
       return;
-    case "act_ws_new":
-      editor.executeAction("orchestrator_new");
-      return;
-    case "act_ws_agent":
-      editor.executeAction("orchestrator_run_agent");
-      return;
-    case "act_ws_dock":
-      editor.executeAction("toggle_dock_focus");
-      return;
-    case "orchestratorToggle": {
-      // The one control on this page that writes a *core* setting, so it
-      // goes through `saveSetting`: the value has to outlive the session
-      // to mean anything — it decides what the next bare `fresh` does,
-      // and the next bare `fresh` is a different process.
-      const next = !orchestratorMode();
-      orchestratorPending = next;
-      editor.saveSetting("orchestrator_mode", next);
-      // Say what changed and, because the change lands on the *next*
-      // launch rather than this one, when it takes effect. A switch whose
-      // effect you cannot see is a switch you cannot tell you flipped.
-      editor.setStatus(
-        next
-          ? "Orchestrator mode on — `fresh` reopens your last workspace"
-          : "Orchestrator mode off — `fresh` opens an editor here",
-      );
-      render();
-      return;
-    }
     case "startupToggle": {
       // Say so. This is the one control on the page that changes a
       // persisted setting, it is reachable from the keyboard, and the

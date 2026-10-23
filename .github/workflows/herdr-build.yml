@@ -1,0 +1,80 @@
+name: herdr build
+
+# The fork's deliverable: a fresh.exe for the wr/herdr team environment (Windows, no admin), built
+# on every push and pull request. Pushes to master and to the herdr branch publish it as the
+# release v<herdr-version>-herdr (created, or its files replaced), so "latest" is always the
+# current build; a pushed `v*` tag publishes its own release.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master, claude/herdr-fork]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: fresh.exe (windows x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Build
+        run: cargo build --release -p fresh-editor --bin fresh
+      - name: Smoke test
+        run: target/release/fresh.exe --version
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-windows-x64
+          path: target/release/fresh.exe
+
+  release:
+    name: release
+    if: github.event_name == 'push'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: fresh-windows-x64
+          path: dist
+      - name: Checksum
+        working-directory: dist
+        run: sha256sum fresh.exe > fresh.exe.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$(tr -d '[:space:]' < herdr-version)-herdr"
+          fi
+          notes="herdr edition of Fresh, built from ${GITHUB_SHA::7}. Install: put fresh.exe in bin\\ next to wr's install.ps1, or anywhere on PATH."
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/fresh.exe dist/fresh.exe.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --notes "$notes" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/fresh.exe dist/fresh.exe.sha256 --target "$GITHUB_SHA" \
+              --title "$tag" --notes "$notes" --latest --repo "$GITHUB_REPOSITORY"
+          fi

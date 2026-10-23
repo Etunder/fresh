@@ -950,7 +950,11 @@ impl crate::app::window::Window {
         };
         let canonical_data = canonicalize(&self.resources.dir_context.data_dir);
         let canonical_root = canonicalize(&self.root);
-        path.starts_with(&canonical_data) && !path.starts_with(&canonical_root)
+        // the notebook plugin's working copies (a notebook's cells as text) are there to be edited
+        let notebooks = canonical_data.join("notebooks");
+        path.starts_with(&canonical_data)
+            && !path.starts_with(&canonical_root)
+            && !path.starts_with(&notebooks)
     }
 
     /// Install a freshly-built file buffer into this window and apply every

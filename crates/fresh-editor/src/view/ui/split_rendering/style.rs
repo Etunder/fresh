@@ -246,18 +246,31 @@ fn build_virtual_view_line(
                     if o.underline {
                         s.underline = true;
                     }
+                    if let Some(fg) = &o.fg {
+                        s.fg = Some(fg.clone());
+                    }
                 }
                 Some(s)
             })
             .collect()
     };
+    // Columns by display width: a combining mark shares its base's cell (kitty image placeholders
+    // are a private-use char plus two or three marks), a wide char takes two. Control chars keep
+    // one column each, as before.
+    let mut char_visual_cols = Vec::with_capacity(len);
+    let mut visual_to_char = Vec::with_capacity(len);
+    for (i, ch) in text.chars().enumerate() {
+        char_visual_cols.push(visual_to_char.len());
+        let width = if ch.is_control() { 1 } else { char_width(ch) };
+        visual_to_char.extend(std::iter::repeat_n(i, width));
+    }
     ViewLine {
         text: text.to_string(),
         source_start_byte: None,
         char_source_bytes: vec![None; len],
         char_styles,
-        char_visual_cols: (0..len).collect(),
-        visual_to_char: (0..len).collect(),
+        char_visual_cols,
+        visual_to_char,
         tab_starts: HashSet::new(),
         line_start: LineStart::AfterInjectedNewline,
         ends_with_newline: true,

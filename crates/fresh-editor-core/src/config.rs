@@ -382,6 +382,39 @@ impl JsonSchema for LineEndingOption {
     }
 }
 
+/// How the editor's chrome (tab bar, status bar, file explorer) is laid out.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChromeStyle {
+    /// Fresh's own layout.
+    #[default]
+    Fresh,
+    /// The herdr multiplexer's: tabs as chips with a close mark only on hover, a mode-bar status
+    /// line, a sidebar-style file explorer (see docs/herdr/style.md).
+    Herdr,
+}
+
+impl ChromeStyle {
+    pub fn is_herdr(self) -> bool {
+        self == Self::Herdr
+    }
+}
+
+impl JsonSchema for ChromeStyle {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ChromeStyle")
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "How the editor's chrome is laid out",
+            "type": "string",
+            "enum": ["fresh", "herdr"],
+            "default": "fresh"
+        })
+    }
+}
+
 /// Where the cursor may move beyond the end of a line (virtual space).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -458,23 +491,15 @@ pub struct Config {
     #[serde(default)]
     pub locale: LocaleName,
 
-    /// Check for new versions on startup (default: true).
-    /// Also sends basic anonymous telemetry (version, OS, terminal type).
-    #[serde(default = "default_true")]
+    /// Check for new versions on startup (default: false in this fork: the check asks upstream
+    /// Fresh, whose releases are not this build, and sends basic anonymous telemetry).
+    #[serde(default)]
     pub check_for_updates: bool,
 
-    /// Offer to update from inside the editor when a new version is found (default: true).
-    /// When off, the status-bar indicator only tells you an update exists.
-    /// Needs `check_for_updates` and an install method that can self-update.
-    #[serde(default = "default_true")]
+    /// Offer to update from inside the editor when a new version is found (default: false in
+    /// this fork, which is built without self-update: updating would replace it with upstream).
+    #[serde(default)]
     pub self_update: bool,
-
-    /// When on (default), `fresh` with no arguments reattaches to a single background
-    /// editor with the workspace dock and your last workspace. When off, it opens a
-    /// plain editor in the current directory; runs with files or flags are unaffected.
-    #[serde(default = "default_true")]
-    #[schemars(extend("x-order" = 1))]
-    pub orchestrator_mode: bool,
 
     /// Editor behavior settings (indentation, line numbers, wrapping, etc.)
     #[serde(default)]
@@ -851,6 +876,7 @@ impl WhitespaceVisibility {
 /// - `"{palette}"` — command palette shortcut hint
 /// - `"{clock}"` — current time (HH:MM)
 /// - `"{remote}"` — remote authority indicator (Local / SSH / Container / Disconnected)
+/// - `"{mode}"` — what has the keyboard, as a badge (`EDIT`, `TERMINAL`, `EXPLORER`, a plugin mode)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum StatusBarElement {
@@ -903,6 +929,9 @@ pub enum StatusBarElement {
     /// workspace-trust prompt. A persistent, core counterpart to the env-manager
     /// plugin's per-buffer trust chip.
     WorkspaceTrust,
+    /// What has the keyboard, as herdr's mode badge: `EDIT`, `TERMINAL`,
+    /// `EXPLORER`, `PROMPT`, or the active plugin mode (`NOTEBOOK`, vi's).
+    Mode,
     /// Custom token registered by a plugin (format: "plugin_name:token_name")
     CustomToken(String),
 }
@@ -935,6 +964,7 @@ impl TryFrom<String> for StatusBarElement {
             "clock" => Ok(Self::Clock),
             "remote" => Ok(Self::RemoteIndicator),
             "trust" => Ok(Self::WorkspaceTrust),
+            "mode" => Ok(Self::Mode),
             _ => {
                 // Check if it's a custom token (contains ':')
                 if inner.contains(':') {
@@ -969,6 +999,7 @@ impl From<StatusBarElement> for String {
             StatusBarElement::Clock => "{clock}".to_string(),
             StatusBarElement::RemoteIndicator => "{remote}".to_string(),
             StatusBarElement::WorkspaceTrust => "{trust}".to_string(),
+            StatusBarElement::Mode => "{mode}".to_string(),
             StatusBarElement::CustomToken(name) => format!("{{{}}}", name),
         }
     }
@@ -1000,7 +1031,8 @@ impl schemars::JsonSchema for StatusBarElement {
                 {"value": "{palette}", "name": "Palette"},
                 {"value": "{clock}", "name": "Clock"},
                 {"value": "{remote}", "name": "Remote Indicator"},
-                {"value": "{trust}", "name": "Workspace Trust"}
+                {"value": "{trust}", "name": "Workspace Trust"},
+                {"value": "{mode}", "name": "Mode"}
             ]
         })
     }
@@ -1193,6 +1225,13 @@ pub struct EditorConfig {
     #[serde(default = "default_true")]
     #[schemars(extend("x-section" = "Display"))]
     pub show_menu_bar: bool,
+
+    /// Layout of the tab bar, status bar and file explorer. "fresh": Fresh's own. "herdr": like
+    /// the herdr multiplexer (tab chips, close mark on hover, mode-bar status line).
+    /// Default: "fresh"; the herdr edition ships "herdr".
+    #[serde(default)]
+    #[schemars(extend("x-section" = "Display"))]
+    pub chrome_style: ChromeStyle,
 
     /// Show a wave-animation screensaver after `screensaver_idle_minutes` with no
     /// input. Any key or mouse move ends it. Default: false
@@ -1821,6 +1860,7 @@ impl Default for EditorConfig {
             quick_suggestions_delay_ms: default_quick_suggestions_delay(),
             suggest_on_trigger_characters: true,
             show_menu_bar: true,
+            chrome_style: ChromeStyle::default(),
             screensaver_enabled: false,
             screensaver_idle_minutes: default_screensaver_idle_minutes(),
             menu_bar_mnemonics: true,
@@ -2974,9 +3014,8 @@ impl Default for Config {
             version: 0,
             theme: default_theme_name(),
             locale: LocaleName::default(),
-            check_for_updates: true,
-            self_update: true,
-            orchestrator_mode: true,
+            check_for_updates: false,
+            self_update: false,
             editor: EditorConfig::default(),
             file_explorer: FileExplorerConfig::default(),
             sidebar: SidebarConfig::default(),

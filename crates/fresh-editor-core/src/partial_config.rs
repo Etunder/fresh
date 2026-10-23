@@ -47,6 +47,47 @@ fn merge_hashmap<K: Clone + Eq + std::hash::Hash, V: Clone>(
     }
 }
 
+/// Merge the language servers of a lower layer into this one. A language both name with one
+/// server each is merged field by field (what this layer leaves unset comes from the lower one),
+/// as a single-server entry is merged with the built-in default when the config resolves: a user
+/// layer that only turns a server off keeps the command a lower layer gave it.
+fn merge_lsp(
+    target: &mut Option<HashMap<String, crate::types::LspLanguageConfig>>,
+    other: &Option<HashMap<String, crate::types::LspLanguageConfig>>,
+) {
+    use crate::types::LspLanguageConfig;
+    match (target, other) {
+        (Some(t), Some(o)) => {
+            for (key, value) in o {
+                match t.get_mut(key) {
+                    Some(existing) => {
+                        let (mine, theirs) = (existing.as_slice(), value.as_slice());
+                        if mine.len() == 1 && theirs.len() == 1 {
+                            let merged = mine[0].clone().merge_with_defaults(&theirs[0]);
+                            // in the form it was written in (an object stays an object)
+                            *existing = match existing {
+                                LspLanguageConfig::Single(_) => {
+                                    LspLanguageConfig::Single(Box::new(merged))
+                                }
+                                LspLanguageConfig::Multi(_) => {
+                                    LspLanguageConfig::Multi(vec![merged])
+                                }
+                            };
+                        }
+                    }
+                    None => {
+                        t.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (t @ None, Some(o)) => {
+            *t = Some(o.clone());
+        }
+        _ => {}
+    }
+}
+
 /// Merge two HashMaps where values implement Merge (for recursive merging).
 fn merge_hashmap_recursive<K, V>(target: &mut Option<HashMap<K, V>>, other: &Option<HashMap<K, V>>)
 where
@@ -78,7 +119,6 @@ pub struct PartialConfig {
     pub locale: Option<String>,
     pub check_for_updates: Option<bool>,
     pub self_update: Option<bool>,
-    pub orchestrator_mode: Option<bool>,
     pub editor: Option<PartialEditorConfig>,
     pub file_explorer: Option<PartialFileExplorerConfig>,
     pub file_browser: Option<PartialFileBrowserConfig>,
@@ -108,7 +148,6 @@ impl Merge for PartialConfig {
         self.locale.merge_from(&other.locale);
         self.check_for_updates.merge_from(&other.check_for_updates);
         self.self_update.merge_from(&other.self_update);
-        self.orchestrator_mode.merge_from(&other.orchestrator_mode);
 
         // Nested structs: merge recursively
         merge_partial(&mut self.editor, &other.editor);
@@ -130,7 +169,7 @@ impl Merge for PartialConfig {
         merge_hashmap_recursive(&mut self.languages, &other.languages);
         self.default_language.merge_from(&other.default_language);
         self.lsp_enabled.merge_from(&other.lsp_enabled);
-        merge_hashmap(&mut self.lsp, &other.lsp);
+        merge_lsp(&mut self.lsp, &other.lsp);
         merge_hashmap(&mut self.universal_lsp, &other.universal_lsp);
         merge_hashmap_recursive(&mut self.plugins, &other.plugins);
 
@@ -214,6 +253,7 @@ pub struct PartialEditorConfig {
     pub quick_suggestions_delay_ms: Option<u64>,
     pub suggest_on_trigger_characters: Option<bool>,
     pub show_menu_bar: Option<bool>,
+    pub chrome_style: Option<crate::config::ChromeStyle>,
     pub screensaver_enabled: Option<bool>,
     pub screensaver_idle_minutes: Option<u32>,
     pub menu_bar_mnemonics: Option<bool>,
@@ -338,6 +378,7 @@ impl Merge for PartialEditorConfig {
         self.suggest_on_trigger_characters
             .merge_from(&other.suggest_on_trigger_characters);
         self.show_menu_bar.merge_from(&other.show_menu_bar);
+        self.chrome_style.merge_from(&other.chrome_style);
         self.screensaver_enabled
             .merge_from(&other.screensaver_enabled);
         self.screensaver_idle_minutes
@@ -733,6 +774,7 @@ impl From<&crate::config::EditorConfig> for PartialEditorConfig {
             quick_suggestions_delay_ms: Some(cfg.quick_suggestions_delay_ms),
             suggest_on_trigger_characters: Some(cfg.suggest_on_trigger_characters),
             show_menu_bar: Some(cfg.show_menu_bar),
+            chrome_style: Some(cfg.chrome_style),
             screensaver_enabled: Some(cfg.screensaver_enabled),
             screensaver_idle_minutes: Some(cfg.screensaver_idle_minutes),
             menu_bar_mnemonics: Some(cfg.menu_bar_mnemonics),
@@ -906,6 +948,7 @@ impl PartialEditorConfig {
                 .suggest_on_trigger_characters
                 .unwrap_or(defaults.suggest_on_trigger_characters),
             show_menu_bar: self.show_menu_bar.unwrap_or(defaults.show_menu_bar),
+            chrome_style: self.chrome_style.unwrap_or(defaults.chrome_style),
             screensaver_enabled: self
                 .screensaver_enabled
                 .unwrap_or(defaults.screensaver_enabled),
@@ -1256,7 +1299,6 @@ impl From<&crate::config::Config> for PartialConfig {
             locale: cfg.locale.0.clone(),
             check_for_updates: Some(cfg.check_for_updates),
             self_update: Some(cfg.self_update),
-            orchestrator_mode: Some(cfg.orchestrator_mode),
             editor: Some(PartialEditorConfig::from(&cfg.editor)),
             file_explorer: Some(PartialFileExplorerConfig::from(&cfg.file_explorer)),
             file_browser: Some(PartialFileBrowserConfig::from(&cfg.file_browser)),
@@ -1454,7 +1496,6 @@ impl PartialConfig {
             ),
             check_for_updates: self.check_for_updates.unwrap_or(defaults.check_for_updates),
             self_update: self.self_update.unwrap_or(defaults.self_update),
-            orchestrator_mode: self.orchestrator_mode.unwrap_or(defaults.orchestrator_mode),
             editor: self
                 .editor
                 .map(|e| e.resolve(&defaults.editor))

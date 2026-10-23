@@ -1585,6 +1585,7 @@
   "settings.option.clock": "Clock",
   "settings.option.remote": "Remote Indicator",
   "settings.option.trust": "Workspace Trust",
+  "settings.option.mode": "Mode",
   "settings.field.editor.whitespace_show": "Show Whitespace",
   "settings.field.editor.whitespace_spaces_leading": "Leading Spaces",
   "settings.field.editor.whitespace_spaces_inner": "Inner Spaces",

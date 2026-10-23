@@ -779,4 +779,27 @@ the type (for example a misspelled field name) make the call throw.
 addMenuItem(opts: AddMenuItemOptions): boolean;
 ```
 
+## Completion
+
+### `registerCompletionSource`
+
+Offer completions for a buffer: from now on the editor's completion requests on it (Ctrl+Space,
+or while typing when the popup shows by itself) fire the `completion_requested` hook, which
+the plugin answers with `supplyCompletions`; its items join the LSP's in the popup. Typing one
+of `triggerCharacters` (e.g. ".") asks at once.
+
+```typescript
+registerCompletionSource(bufferId: number, triggerCharacters: string): boolean;
+```
+
+### `supplyCompletions`
+
+Answer a `completion_requested` hook (an empty list is an answer too: the popup then
+shows the other sources alone). Answers to a request the editor has moved on from are
+dropped.
+
+```typescript
+supplyCompletions(requestId: number, items: PluginCompletionItem[]): boolean;
+```
+
 :::

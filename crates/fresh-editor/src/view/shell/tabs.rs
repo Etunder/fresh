@@ -83,6 +83,9 @@ pub struct Strip {
     pub reveal: Option<Rc<fresh_ui::behavior::Anchor>>,
     /// The word a preview tab carries after its name, localized.
     pub preview_label: String,
+    /// `chrome_style: herdr`: tabs as herdr's chips — wider padding and the `×` only on the tab
+    /// under the pointer (its slot stays, so nothing moves and a click still lands).
+    pub herdr: bool,
 }
 
 impl Strip {
@@ -90,7 +93,7 @@ impl Strip {
     /// wide: `TAB_NAME_MAX_COLS` when the names do not fit, and no cap at all
     /// when they do.
     fn name_cap(&self, room: u16) -> usize {
-        match natural_width(&self.tabs, &self.preview_label) > usize::from(room) {
+        match natural_width(&self.tabs, &self.preview_label, self.herdr) > usize::from(room) {
             true => TAB_NAME_MAX_COLS,
             false => usize::MAX,
         }
@@ -181,6 +184,12 @@ pub fn label(t: &Tab, cap: usize, preview_label: &str) -> String {
     format!(" {name}{modified}{preview}{binary} ")
 }
 
+/// [`label`] for a herdr chip: two cells before the name, so with the one-cell close slot after
+/// it the name sits centred in the chip, as herdr pads its tabs.
+pub fn chip_label(t: &Tab, cap: usize, preview_label: &str) -> String {
+    format!(" {}", label(t, cap, preview_label))
+}
+
 /// Columns a press on the strip's `<` or `>` moves the window by.
 ///
 /// The painter's step, kept: a cap is a nudge along the strip, where the
@@ -214,7 +223,8 @@ fn tab_ink(s: &Strip, i: usize) -> (String, String) {
     } else {
         ("ui.tab_inactive_fg", "ui.tab_inactive_bg", vec![])
     };
-    if t.preview {
+    // herdr has no italics: there the "preview" word alone marks the tab.
+    if t.preview && !s.herdr {
         a.push("italic");
     }
     let name = attrs(fg, bg, &a);
@@ -369,7 +379,7 @@ fn control(glyph: &'static str, hovered: bool, target: HoverTarget, fact: UiFact
         .on_leave(hover(None))
 }
 
-/// The cluster: `[gap] [gap] □ × [trail]`, over the columns reserved for it.
+/// The cluster: `[gap] [gap] □ [gap] × [trail]`, over the columns reserved for it.
 ///
 /// It used to carry the `>` itself, drawn when the tabs overflowed and
 /// stepping the editor's own offset. The strip is a window now and the window
@@ -394,6 +404,9 @@ fn cluster(pane: LeafId, c: Cluster) -> Node<UiMsg> {
         );
     }
     if c.controls.close {
+        if c.controls.maximize {
+            cells.push(row().w(one));
+        }
         cells.push(
             control(
                 "×",
@@ -428,14 +441,17 @@ fn cluster(pane: LeafId, c: Cluster) -> Node<UiMsg> {
 ///
 /// Counts what [`strip`] builds: each label plus its `×`, a cell between
 /// tabs, and a cell plus the `+` after the last one.
-pub fn natural_width(tabs: &[Tab], preview_label: &str) -> usize {
+pub fn natural_width(tabs: &[Tab], preview_label: &str, herdr: bool) -> usize {
     use crate::primitives::display_width::str_width;
     if tabs.is_empty() {
         return str_width(PLUS);
     }
     let names: usize = tabs
         .iter()
-        .map(|t| str_width(&label(t, usize::MAX, preview_label)) + str_width(CLOSE))
+        .map(|t| match herdr {
+            true => str_width(&chip_label(t, usize::MAX, preview_label)) + 1,
+            false => str_width(&label(t, usize::MAX, preview_label)) + str_width(CLOSE),
+        })
         .sum();
     names + (tabs.len() - 1) + 1 + str_width(PLUS)
 }
@@ -486,12 +502,21 @@ fn tab_window(pane: LeafId, s: &Strip, cap: usize) -> Node<UiMsg> {
             cells.push(text(" ").theme(ground()));
         }
         let (name_ink, close_ink) = tab_ink(s, i);
+        let (name, close) = match s.herdr {
+            // a herdr chip: the mark shows while the pointer is anywhere on this tab
+            true => {
+                let hovered = matches!(s.hover, Some((h, _)) if h == t.target);
+                let mark = if hovered { "×" } else { " " };
+                (chip_label(t, cap, &s.preview_label), mark.to_string())
+            }
+            false => (label(t, cap, &s.preview_label), CLOSE.to_string()),
+        };
         // The name and its `×` in one keyed span, so `reveal_key` brings the
         // whole tab into the window rather than stopping with its label flush
         // against the edge. The two keep their own keys inside it.
         cells.push(row().key(tab_span_key(pane, t.target)).children([
-            name_node(pane, t.target, label(t, cap, &s.preview_label), name_ink),
-            close_node(pane, t.target, CLOSE.to_string(), close_ink),
+            name_node(pane, t.target, name, name_ink),
+            close_node(pane, t.target, close, close_ink),
         ]));
     }
 
@@ -655,6 +680,7 @@ mod tests {
             hover_plus: false,
             reveal: None,
             preview_label: "(preview)".into(),
+            herdr: false,
         }
     }
 
@@ -1028,6 +1054,64 @@ mod tests {
 
     /// And the strip's arithmetic: what it would measure with every name
     /// whole, which is the only thing the cap is decided from.
+    /// Every text the strip drew, top to bottom.
+    fn painted(ui: &Ui<UiMsg>) -> String {
+        ui.spec()
+            .items
+            .iter()
+            .filter_map(|i| match &i.draw {
+                fresh_ui::Draw::Lines(l) => {
+                    Some(l.iter().map(|s| s.to_string()).collect::<String>())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// **herdr chips**: two cells before the name, a one-cell close slot after it that shows `×`
+    /// only on the tab under the pointer, the same separator cell between tabs. The slot is
+    /// always there, so hovering moves nothing and a press on it still closes the tab.
+    #[test]
+    fn herdr_chips_show_the_close_mark_only_on_the_hovered_tab() {
+        let herdr = |hover: Option<(TabTarget, bool)>| Strip {
+            herdr: true,
+            hover,
+            ..strip_of(2)
+        };
+        let ui = laid_out(herdr(None), PaneControls::default(), 80);
+        let n0 = rect(&ui, tab_key(pane(), buf(0)));
+        let c0 = rect(&ui, close_tab_key(pane(), buf(0)));
+        let n1 = rect(&ui, tab_key(pane(), buf(1)));
+        assert_eq!(n0.w as usize, str_width("  file_0.rs "));
+        assert_eq!((c0.x, c0.w), (n0.x + n0.w as i32, 1));
+        assert_eq!(n1.x, c0.x + 1 + 1, "one separator cell between chips");
+        assert!(!painted(&ui).contains('×'), "{:?}", painted(&ui));
+
+        let hovered = laid_out(herdr(Some((buf(1), false))), PaneControls::default(), 80);
+        assert_eq!(
+            painted(&hovered).matches('×').count(),
+            1,
+            "{:?}",
+            painted(&hovered)
+        );
+        let c1 = rect(&hovered, close_tab_key(pane(), buf(1)));
+        assert_eq!(
+            rect(&ui, close_tab_key(pane(), buf(1))),
+            c1,
+            "hovering moves nothing"
+        );
+
+        let s = herdr(None);
+        let wide = laid_out(s.clone(), PaneControls::default(), 400);
+        let content: usize = (0..2)
+            .map(|i| rect(&wide, tab_span_key(pane(), buf(i))).w as usize)
+            .sum::<usize>()
+            + 1
+            + 1
+            + str_width(PLUS);
+        assert_eq!(natural_width(&s.tabs, &s.preview_label, true), content);
+    }
+
     #[test]
     fn natural_width_counts_what_the_strip_builds() {
         let s = strip_of(3);
@@ -1038,7 +1122,7 @@ mod tests {
             + 2 // the cell between each pair of tabs
             + 1 // and the one before the `+`
             + str_width(PLUS);
-        assert_eq!(natural_width(&s.tabs, &s.preview_label), content);
+        assert_eq!(natural_width(&s.tabs, &s.preview_label, false), content);
     }
 
     #[test]

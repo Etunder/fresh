@@ -653,8 +653,8 @@ pub fn chrome_themes(remote_disconnected: bool, focused: bool) -> (String, Strin
         )
     } else if focused {
         (
-            attrs("editor.bg", "editor.fg", &["bold"]),
-            pair("editor.cursor", "editor.bg"),
+            attrs("ui.explorer_title_fg", "ui.explorer_title_bg", &["bold"]),
+            pair("ui.explorer_border_fg", "editor.bg"),
         )
     } else {
         (
@@ -699,7 +699,7 @@ pub fn neutral_key(is_hidden: bool, is_symlink: bool, is_dir: bool) -> &'static 
     } else if is_symlink {
         "syntax.type"
     } else if is_dir {
-        "syntax.keyword"
+        "ui.explorer_directory_fg"
     } else {
         "editor.fg"
     }

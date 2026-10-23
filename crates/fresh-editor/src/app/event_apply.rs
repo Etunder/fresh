@@ -28,6 +28,9 @@ impl Editor {
     /// For Delete events, captures displaced marker positions before applying
     /// so undo can restore them to their exact original positions.
     pub fn log_and_apply_event(&mut self, event: &Event) {
+        if self.refuse_notebook_edits(std::slice::from_ref(event)) {
+            return;
+        }
         // Capture displaced markers before the event is applied
         if let Event::Delete { range, .. } = event {
             let displaced = self.active_state().capture_displaced_markers(range);
@@ -372,6 +375,9 @@ impl Editor {
         description: String,
     ) -> Option<Event> {
         use crate::model::event::CursorId;
+        if self.refuse_notebook_edits(&events) {
+            return None;
+        }
 
         // Check if any events modify the buffer
         let has_buffer_mods = events
@@ -749,6 +755,16 @@ impl Editor {
         // stays "seen", while the edit has already carried its end-anchored
         // decorations onto the line below, where the next pass clears them.
         self.handle_refresh_lines(buffer_id);
+
+        // and the `buffer_modified` every other edit path fires (an accepted completion, a
+        // multi-cursor edit, a code action): plugins that redraw on it saw nothing change
+        self.plugin_manager.read().unwrap().run_hook(
+            "buffer_modified",
+            crate::services::plugins::hooks::HookArgs::BufferModified {
+                buffer_id,
+                window_id: self.active_window.0,
+            },
+        );
 
         Some(bulk_edit)
     }

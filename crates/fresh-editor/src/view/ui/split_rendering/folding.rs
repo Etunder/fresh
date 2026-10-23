@@ -140,6 +140,10 @@ pub(super) fn apply_folding(
         if next_source_byte[idx] == Some(byte) {
             continue;
         }
+        // (an empty placeholder asks for none: the lines are hidden, not folded away to look at)
+        if placeholder.as_deref() == Some("") {
+            continue;
+        }
         let raw_text = placeholder
             .as_deref()
             .filter(|s| !s.trim().is_empty())

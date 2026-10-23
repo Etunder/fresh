@@ -508,3 +508,32 @@ fn test_status_bar_popup_opens_above_its_own_segment() {
         harness.screen_to_string()
     );
 }
+
+/// `{mode}` is herdr's mode badge: what has the keyboard, upper-cased, set
+/// off from its neighbour by a space rather than the separator.
+#[test]
+fn test_mode_badge_names_what_has_the_keyboard() {
+    let mut config = config_with_status_bar(
+        vec![StatusBarElement::Mode, StatusBarElement::Cursor],
+        vec![],
+    );
+    config.editor.status_bar.separator = "|".to_string();
+    let mut harness = EditorTestHarness::with_temp_project_and_config(120, 30, config).unwrap();
+    let dir = harness.project_dir().unwrap();
+    let file = dir.join("a.txt");
+    fs::write(&file, "content\n").unwrap();
+    harness.open_file(&file).unwrap();
+    harness.render().unwrap();
+    let status = harness.get_status_bar();
+    assert!(
+        status.starts_with(" EDIT   Ln 1, Col 1"),
+        "Status bar: {status:?}"
+    );
+
+    harness
+        .send_key(KeyCode::Char('e'), KeyModifiers::CONTROL)
+        .unwrap();
+    harness
+        .wait_until(|h| h.get_status_bar().starts_with(" EXPLORER "))
+        .unwrap();
+}

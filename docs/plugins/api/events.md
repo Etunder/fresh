@@ -671,6 +671,20 @@ lsp_open_external_uri: {
 };
 ```
 
+#### `completion_requested`
+
+The editor wants completions at `position` (a byte offset) in a buffer this plugin
+registered with `registerCompletionSource`. Answer with
+`editor.supplyCompletions(request_id, items)`.
+
+```typescript
+completion_requested: {
+  buffer_id: number;
+  request_id: number;
+  position: number;
+};
+```
+
 ### UI events
 
 #### `action_popup_result`

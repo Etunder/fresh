@@ -121,10 +121,12 @@ impl Editor {
         None
     }
 
-    /// Handle click in editor content area
+    /// The `mouse_click` hook's payload for a left press on a pane's content:
+    /// where it landed, in the buffer and on a plugin's virtual line, and
+    /// which press of a run it is (`clicks`).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn handle_editor_click(
-        &mut self,
+    pub(super) fn mouse_click_hook_args(
+        &self,
         byte: Option<usize>,
         col: u16,
         row: u16,
@@ -132,8 +134,8 @@ impl Editor {
         buffer_id: BufferId,
         content_rect: ratatui::layout::Rect,
         modifiers: crossterm::event::KeyModifiers,
-    ) -> AnyhowResult<()> {
-        use crate::model::event::{CursorId, Event};
+        clicks: u8,
+    ) -> HookArgs {
         use crossterm::event::KeyModifiers;
 
         // Build modifiers string for plugins
@@ -176,6 +178,78 @@ impl Editor {
             None => (None, None),
         };
 
+        // On a plugin's virtual line: its index among the virtual rows after
+        // the last real row above it (the line `byte` resolves to)
+        let mc_virtual_row = self.active_window().pane_view(split_id).and_then(|v| {
+            let r = row.checked_sub(content_rect.y)? as usize;
+            if !v.rows.get(r)?.is_plugin_virtual {
+                return None;
+            }
+            let real = v.rows[..r].iter().rposition(|m| !m.is_plugin_virtual)?;
+            Some((r - real - 1) as u32)
+        });
+        let mc_virtual_col = mc_virtual_row.and_then(|_| {
+            let gutter = self
+                .windows
+                .get(&self.active_window)?
+                .buffers
+                .get(&buffer_id)?
+                .margins
+                .left_total_width() as u16;
+            Some(col.checked_sub(content_rect.x + gutter)? as u32)
+        });
+
+        HookArgs::MouseClick {
+            column: col,
+            row,
+            button: "left".to_string(),
+            modifiers: modifiers_str,
+            content_x: content_rect.x,
+            content_y: content_rect.y,
+            buffer_id: Some(buffer_id.0 as u64),
+            buffer_row: mc_buffer_row,
+            buffer_col: mc_buffer_col,
+            virtual_row: mc_virtual_row,
+            virtual_col: mc_virtual_col,
+            clicks,
+        }
+    }
+
+    /// Hands a click's payload to the plugins listening for `hook`
+    /// (`mouse_click`, or `mouse_double_click` for a run's later presses).
+    pub(super) fn run_mouse_click_hook(&self, hook: &str, args: HookArgs) {
+        let plugins = self.plugin_manager.read().unwrap();
+        if plugins.has_hook_handlers(hook) {
+            plugins.run_hook(hook, args);
+        }
+    }
+
+    /// Handle click in editor content area
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn handle_editor_click(
+        &mut self,
+        byte: Option<usize>,
+        col: u16,
+        row: u16,
+        split_id: crate::model::event::LeafId,
+        buffer_id: BufferId,
+        content_rect: ratatui::layout::Rect,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> AnyhowResult<()> {
+        use crate::model::event::{CursorId, Event};
+        use crossterm::event::KeyModifiers;
+
+        let hook_args = self.mouse_click_hook_args(
+            byte,
+            col,
+            row,
+            split_id,
+            buffer_id,
+            content_rect,
+            modifiers,
+            1,
+        );
+
         // A press on a widget never reaches here: a mounted panel's widgets
         // are nodes in the tree, and a node answers its own press and stops
         // it (`view::shell::widgets`). What arrives is a press the panel's
@@ -186,7 +260,11 @@ impl Editor {
         // index behaves the same whether or not anything is listening — its
         // author is typically a script that has already exited.
         #[cfg(feature = "plugins")]
-        if let Some(brow) = mc_buffer_row {
+        if let HookArgs::MouseClick {
+            buffer_row: Some(brow),
+            ..
+        } = hook_args
+        {
             if let Some(target) = self.line_target_at(buffer_id, brow as usize) {
                 self.follow_line_target(target, split_id);
                 return Ok(());
@@ -195,27 +273,7 @@ impl Editor {
 
         // Dispatch MouseClick hook to plugins
         // Plugins can handle clicks on their virtual buffers
-        if self
-            .plugin_manager
-            .read()
-            .unwrap()
-            .has_hook_handlers("mouse_click")
-        {
-            self.plugin_manager.read().unwrap().run_hook(
-                "mouse_click",
-                HookArgs::MouseClick {
-                    column: col,
-                    row,
-                    button: "left".to_string(),
-                    modifiers: modifiers_str,
-                    content_x: content_rect.x,
-                    content_y: content_rect.y,
-                    buffer_id: Some(buffer_id.0 as u64),
-                    buffer_row: mc_buffer_row,
-                    buffer_col: mc_buffer_col,
-                },
-            );
-        }
+        self.run_mouse_click_hook("mouse_click", hook_args);
 
         // Fixed buffer-group panels (toolbars/headers/footers) aren't
         // interactive targets: focusing them would let arrow keys move an

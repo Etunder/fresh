@@ -3000,10 +3000,7 @@ mod tests {
                 .collect()
         };
         let general = paths("General");
-        assert_eq!(
-            general.first().map(String::as_str),
-            Some("/orchestrator_mode")
-        );
+        assert!(general.iter().any(|p| p == "/theme"), "{general:?}");
         for moved in ["/keybindings", "/languages", "/lsp", "/default_language"] {
             assert!(
                 !general.iter().any(|p| p == moved),

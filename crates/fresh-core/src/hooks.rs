@@ -331,6 +331,14 @@ pub enum HookArgs {
         server_name: String,
     },
 
+    /// The editor wants completions at `position` (a byte offset) in a buffer a plugin registered
+    /// with `registerCompletionSource`; the plugin answers with `supplyCompletions(request_id, …)`.
+    CompletionRequested {
+        buffer_id: BufferId,
+        request_id: u64,
+        position: usize,
+    },
+
     /// Mouse click event
     MouseClick {
         /// Column (x coordinate) in screen cells
@@ -354,6 +362,18 @@ pub enum HookArgs {
         /// 0-indexed byte column inside the buffer row. None when the
         /// click is outside any buffer.
         buffer_col: Option<u32>,
+        /// When the click is on a plugin's virtual line: which of the
+        /// virtual rows below `buffer_row`'s line it is (0 = the first).
+        /// None on the buffer's own text, or when that line is scrolled
+        /// out of view.
+        virtual_row: Option<u32>,
+        /// And the column in it, from the text area's left edge (past
+        /// the gutter).
+        virtual_col: Option<u32>,
+        /// Which press of a run this is, as the editor's multi-click
+        /// detector counts them: 1 a single click, 2 a double click's
+        /// second press, 3 a triple click's third.
+        clicks: u8,
     },
 
     /// Mouse move/hover event

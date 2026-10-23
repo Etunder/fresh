@@ -491,6 +491,7 @@ fn rust_to_typescript(ty: &Type, attrs: &[Attribute]) -> String {
                 | "ActionSpec"
                 | "ActionPopupAction"
                 | "ActionPopupOptions"
+                | "PluginCompletionItem"
                 | "ViewTokenWire"
                 | "ViewTokenStyle"
                 | "TokenColor"
@@ -716,7 +717,8 @@ type BufferId = number;
 type SplitId = number;
 
 /**
- * Payload delivered to handlers registered with `editor.on("mouse_click", ...)`.
+ * Payload delivered to handlers registered with `editor.on("mouse_click", ...)` (and
+ * `"mouse_double_click"`, for a double or triple click's later press).
  *
  * All coordinate fields are in cell (terminal character) units. `buffer_*`
  * fields are `null` when the click did not land in any buffer panel.
@@ -740,6 +742,15 @@ interface MouseClickHookArgs {
   buffer_row: number | null;
   /** 0-indexed byte column inside the buffer row. */
   buffer_col: number | null;
+  /**
+   * On a plugin's virtual line: which of the virtual rows below
+   * `buffer_row` it is (0 = the first); `null` on the buffer's own text.
+   */
+  virtual_row: number | null;
+  /** And the column in it, from the text area's left edge (past the gutter). */
+  virtual_col: number | null;
+  /** Which press of a run this is: 1 a single click, 2 a double click's second, 3 a triple's third. */
+  clicks: number;
 }
 
 /**

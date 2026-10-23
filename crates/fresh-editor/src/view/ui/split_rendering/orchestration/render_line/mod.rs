@@ -735,6 +735,11 @@ pub(crate) fn render_view_lines(input: LineRenderInput<'_>) -> LineRenderOutput 
             is_on_cursor_line = line_start_byte
                 .is_some_and(|b| b >= cursor_line_start_byte && b < cursor_line_end_byte);
         }
+        // A plugin's virtual line under the cursor line (a notebook output, a blame line) is not
+        // part of it: it keeps its own ground instead of inheriting the cursor-line highlight.
+        if current_view_line.virtual_line_style.is_some() {
+            is_on_cursor_line = false;
+        }
 
         // Gutter display number — line number for small files, byte offset for large files
         let gutter_num = if let Some(byte) = line_start_byte {

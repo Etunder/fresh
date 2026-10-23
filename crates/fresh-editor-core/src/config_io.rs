@@ -461,6 +461,20 @@ impl ConfigResolver {
             merged.merge_from(&user_partial);
         }
 
+        // The herdr edition's own defaults, under everything the user wrote. `status_bar` merges
+        // as a whole and the layer merged in wins it, so the herdr one only fills an unset bar.
+        let mut herdr = herdr_defaults();
+        if merged
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.status_bar.is_some())
+        {
+            if let Some(e) = herdr.editor.as_mut() {
+                e.status_bar = None;
+            }
+        }
+        merged.merge_from(&herdr);
+
         // Resolve to concrete Config (applies system defaults for any remaining None values)
         Ok(merged.resolve())
     }
@@ -669,6 +683,10 @@ impl ConfigResolver {
         }
         // User layer's parent is empty (defaults handled during resolve)
 
+        // Under every layer: the herdr edition's defaults, so saving writes what differs from them
+        // (not the herdr theme, status bar or language servers, as if the user had chosen those)
+        merged.merge_from(&herdr_defaults());
+
         Ok(merged)
     }
 
@@ -841,6 +859,15 @@ impl Config {
         }
         serde_json::Value::Object(serde_json::Map::new())
     }
+}
+
+/// The herdr edition's defaults (`herdr-defaults.json`): the look and feel this fork ships with,
+/// layered between upstream's built-in defaults and the user's config so any setting the user
+/// writes still wins. Kept out of `Config::default()`, which the test suite builds on, so upstream
+/// tests keep testing upstream's defaults.
+pub fn herdr_defaults() -> PartialConfig {
+    serde_json::from_str(include_str!("../herdr-defaults.json"))
+        .expect("herdr-defaults.json is a valid partial config")
 }
 
 /// Compute the difference between two JSON values.
@@ -1760,6 +1787,41 @@ mod tests {
     }
 
     #[test]
+    fn herdr_defaults_apply_under_the_users_config() {
+        let temp = TempDir::new().unwrap();
+        let dir_context = DirectoryContext::for_testing(temp.path());
+        let working_dir = temp.path().join("project");
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        // no config file at all: the herdr look
+        let config = Config::load_with_layers(&dir_context, &working_dir);
+        assert_eq!(config.theme.0, "herdr");
+        assert!(!config.editor.show_menu_bar);
+        // the built-in defaults themselves stay upstream's
+        assert!(Config::default().editor.show_menu_bar);
+
+        assert_eq!(config.editor.status_bar.separator, "·");
+
+        // what the user writes wins, the status bar included (it merges as a whole)
+        std::fs::create_dir_all(&dir_context.config_dir).unwrap();
+        std::fs::write(
+            dir_context.config_path(),
+            r#"{"theme": "nord", "editor": {"show_menu_bar": true,
+                "status_bar": {"left": ["{cursor}"], "right": [], "separator": "|"}}}"#,
+        )
+        .unwrap();
+        let config = Config::load_with_layers(&dir_context, &working_dir);
+        assert_eq!(config.theme.0, "nord");
+        assert!(config.editor.show_menu_bar);
+        assert_eq!(config.editor.status_bar.separator, "|");
+        assert!(config
+            .editor
+            .status_bar
+            .left
+            .contains(&crate::config::StatusBarElement::Cursor));
+    }
+
+    #[test]
     fn load_with_layers_works() {
         let temp = TempDir::new().unwrap();
         let dir_context = DirectoryContext::for_testing(temp.path());
@@ -2171,8 +2233,11 @@ mod tests {
         assert_eq!(reloaded.theme.0, "dracula");
         assert_eq!(reloaded.editor.tab_size, 2);
         assert!(!reloaded.lsp["python"].as_slice()[0].enabled);
-        // Command should come from defaults
-        assert_eq!(reloaded.lsp["python"].as_slice()[0].command, "pylsp");
+        // Command should come from defaults (the herdr edition's: basedpyright)
+        assert_eq!(
+            reloaded.lsp["python"].as_slice()[0].command,
+            "basedpyright-langserver"
+        );
     }
 
     /// Test that toggling LSP enabled/disabled preserves the command field.

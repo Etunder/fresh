@@ -720,6 +720,7 @@ impl Editor {
                 text_overlays,
                 epoch,
                 compose_only,
+                clip,
             } => {
                 self.handle_add_virtual_line(
                     buffer_id,
@@ -735,6 +736,7 @@ impl Editor {
                     text_overlays,
                     epoch,
                     compose_only,
+                    clip,
                 );
             }
             PluginCommand::ClearVirtualTextNamespace {
@@ -939,6 +941,11 @@ impl Editor {
             PluginCommand::SetBufferDiffGutter { buffer_id, enabled } => {
                 self.handle_set_buffer_diff_gutter(buffer_id, enabled);
             }
+            PluginCommand::SetBufferTabLabel { buffer_id, label } => {
+                if let Some(meta) = self.active_window_mut().buffer_metadata.get_mut(&buffer_id) {
+                    meta.tab_label = label;
+                }
+            }
             PluginCommand::SetBufferShowCursors { buffer_id, show } => {
                 self.handle_set_buffer_show_cursors(buffer_id, show);
             }
@@ -1090,6 +1097,9 @@ impl Editor {
             // ==================== Status/Prompt Commands ====================
             PluginCommand::SetStatus { message } => {
                 self.handle_set_status(message);
+            }
+            PluginCommand::WriteTerminalGraphics { commands } => {
+                self.queue_terminal_graphics(commands.as_bytes());
             }
             PluginCommand::ApplyTheme { theme_name } => {
                 self.apply_theme(&theme_name);
@@ -1837,6 +1847,22 @@ impl Editor {
             PluginCommand::RegisterLspUriScheme { scheme } => {
                 tracing::debug!("Plugin registered LSP URI scheme: {}", scheme);
                 self.lsp_uri_schemes.insert(scheme);
+            }
+
+            PluginCommand::RegisterCompletionSource {
+                buffer_id,
+                trigger_characters,
+            } => {
+                self.plugin_completion_sources
+                    .insert(buffer_id, trigger_characters);
+            }
+
+            PluginCommand::SupplyCompletions { request_id, items } => {
+                if let Err(e) =
+                    self.handle_completion_response(request_id, plugin_completion_items(items))
+                {
+                    tracing::error!("plugin completions: {e}");
+                }
             }
 
             PluginCommand::MarkBufferReadOnly { path } => {
@@ -7448,6 +7474,32 @@ impl crate::app::window::Window {
     fn handle_clear_split_label(&mut self, split_id: SplitId) {
         self.split_manager_mut().clear_label(split_id);
     }
+}
+
+/// A plugin's completions as LSP items, so they filter, rank and insert like the server's.
+fn plugin_completion_items(
+    items: Vec<fresh_core::api::PluginCompletionItem>,
+) -> Vec<lsp_types::CompletionItem> {
+    use lsp_types::CompletionItemKind as K;
+    items
+        .into_iter()
+        .map(|i| lsp_types::CompletionItem {
+            kind: match i.kind.as_deref() {
+                Some("function") => Some(K::FUNCTION),
+                Some("method") => Some(K::METHOD),
+                Some("variable") | Some("instance") | Some("statement") => Some(K::VARIABLE),
+                Some("class") => Some(K::CLASS),
+                Some("module") => Some(K::MODULE),
+                Some("keyword") => Some(K::KEYWORD),
+                Some("property") | Some("param") => Some(K::PROPERTY),
+                _ => None,
+            },
+            detail: i.detail,
+            insert_text: i.insert_text,
+            label: i.label,
+            ..Default::default()
+        })
+        .collect()
 }
 
 #[cfg(test)]

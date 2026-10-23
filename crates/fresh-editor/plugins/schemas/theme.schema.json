@@ -89,6 +89,17 @@
         "status_bar_bg": null,
         "status_palette_fg": null,
         "status_palette_bg": null,
+        "explorer_title_fg": null,
+        "explorer_title_bg": null,
+        "explorer_border_fg": null,
+        "explorer_toggle_fg": null,
+        "explorer_directory_fg": null,
+        "suggestion_selected_fg": null,
+        "suggestion_selected_key_fg": null,
+        "suggestion_selected_source_fg": null,
+        "quick_open_hints_fg": null,
+        "quick_open_hints_bg": null,
+        "notebook_cell_bg": null,
         "status_separator_fg": null,
         "status_separator_bg": null,
         "status_lsp_on_fg": null,
@@ -999,6 +1010,138 @@
         },
         "status_palette_bg": {
           "description": "Command palette shortcut hint background in status bar (falls back to status_bar_bg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explorer_title_fg": {
+          "description": "File explorer title text while focused (falls back to editor.bg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explorer_title_bg": {
+          "description": "File explorer title background while focused (falls back to editor.fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explorer_border_fg": {
+          "description": "File explorer border while focused (falls back to editor.cursor)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explorer_toggle_fg": {
+          "description": "File explorer folder open/closed glyph (falls back to diagnostic.warning_fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "explorer_directory_fg": {
+          "description": "File explorer folder names (falls back to syntax.keyword)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "suggestion_selected_fg": {
+          "description": "Selected suggestion text (falls back to popup_selection_fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "suggestion_selected_key_fg": {
+          "description": "Selected suggestion keybinding (falls back to help_key_fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "suggestion_selected_source_fg": {
+          "description": "Selected suggestion source label (falls back to editor.line_number_fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "quick_open_hints_fg": {
+          "description": "Quick-open mode hints text (falls back to editor.line_number_fg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "quick_open_hints_bg": {
+          "description": "Quick-open mode hints background (falls back to suggestion_selected_bg)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StyledColorDef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "notebook_cell_bg": {
+          "description": "Background of a notebook code cell's source, full width (falls back to editor.current_line_bg)",
           "anyOf": [
             {
               "$ref": "#/$defs/StyledColorDef"

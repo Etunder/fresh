@@ -47,7 +47,8 @@ type BufferId = number;
 /** Split identifier */
 type SplitId = number;
 /**
-* Payload delivered to handlers registered with `editor.on("mouse_click", ...)`.
+* Payload delivered to handlers registered with `editor.on("mouse_click", ...)` (and
+* `"mouse_double_click"`, for a double or triple click's later press).
 *
 * All coordinate fields are in cell (terminal character) units. `buffer_*`
 * fields are `null` when the click did not land in any buffer panel.
@@ -71,6 +72,15 @@ interface MouseClickHookArgs {
 	buffer_row: number | null;
 	/** 0-indexed byte column inside the buffer row. */
 	buffer_col: number | null;
+	/**
+	* On a plugin's virtual line: which of the virtual rows below
+	* `buffer_row` it is (0 = the first); `null` on the buffer's own text.
+	*/
+	virtual_row: number | null;
+	/** And the column in it, from the text area's left edge (past the gutter). */
+	virtual_col: number | null;
+	/** Which press of a run this is: 1 a single click, 2 a double click's second, 3 a triple's third. */
+	clicks: number;
 }
 /**
 * Registry of typed plugin APIs surfaced through
@@ -1062,6 +1072,27 @@ type ActionPopupOptions = {
 	* notifications like install help raised from a status-bar click.
 	*/
 	buffer_id?: number;
+};
+/**
+* One completion a plugin offers for a buffer it registered with `registerCompletionSource`,
+* shown in the editor's completion popup beside the LSP's. `label` is the word that replaces the
+* one at the cursor (unless `insertText` says otherwise), and what the typed prefix filters on.
+*/
+type PluginCompletionItem = {
+	label: string;
+	/**
+	* Shown greyed beside the label (a type or signature).
+	*/
+	detail?: string;
+	/**
+	* The row's icon: "function", "method", "variable", "class", "module", "keyword",
+	* "property", "instance" (anything else shows none).
+	*/
+	kind?: string;
+	/**
+	* What is inserted in place of the word at the cursor, if not `label`.
+	*/
+	insertText?: string;
 };
 /**
 * Options for `editor.addMenuItem` — one plugin-contributed row in an
@@ -3630,28 +3661,19 @@ interface FreshConfig {
 	*/
 	locale?: FreshConfig.LocaleOptions;
 	/**
-	* Check for new versions on startup (default: true).
-	* Also sends basic anonymous telemetry (version, OS, terminal type).
+	* Check for new versions on startup (default: false in this fork: the check asks upstream
+	* Fresh, whose releases are not this build, and sends basic anonymous telemetry).
 	*
-	* Default: `true`
+	* Default: `false`
 	*/
 	check_for_updates?: boolean;
 	/**
-	* Offer to update from inside the editor when a new version is found (default: true).
-	* When off, the status-bar indicator only tells you an update exists.
-	* Needs `check_for_updates` and an install method that can self-update.
+	* Offer to update from inside the editor when a new version is found (default: false in
+	* this fork, which is built without self-update: updating would replace it with upstream).
 	*
-	* Default: `true`
+	* Default: `false`
 	*/
 	self_update?: boolean;
-	/**
-	* When on (default), `fresh` with no arguments reattaches to a single background
-	* editor with the workspace dock and your last workspace. When off, it opens a
-	* plain editor in the current directory; runs with files or flags are unaffected.
-	*
-	* Default: `true`
-	*/
-	orchestrator_mode?: boolean;
 	/**
 	* Editor behavior settings (indentation, line numbers, wrapping, etc.)
 	*/
@@ -3741,6 +3763,12 @@ interface FreshConfig {
 	env?: FreshConfig.EnvConfig;
 }
 declare namespace FreshConfig {
+	/**
+	* How the editor's chrome is laid out
+	*
+	* Default: `"fresh"`
+	*/
+type ChromeStyle = "fresh" | "herdr";
 	/**
 	* Which clipboard methods copy/paste uses, tried in order: OSC 52 (modern
 	* terminals like Kitty, WezTerm), the system clipboard (X11/Wayland), then an
@@ -3865,6 +3893,14 @@ interface EditorConfig {
 		* Default: `true`
 		*/
 		show_menu_bar?: boolean;
+		/**
+		* Layout of the tab bar, status bar and file explorer. "fresh": Fresh's own. "herdr": like
+		* the herdr multiplexer (tab chips, close mark on hover, mode-bar status line).
+		* Default: "fresh"; the herdr edition ships "herdr".
+		*
+		* Default: `"fresh"`
+		*/
+		chrome_style?: ChromeStyle;
 		/**
 		* Show a wave-animation screensaver after `screensaver_idle_minutes` with no
 		* input. Any key or mouse move ends it. Default: false
@@ -5226,6 +5262,16 @@ interface EditorAPI {
 	* @param msg - Text to display; keep short (status bar has limited width)
 	*/
 	setStatus(msg: string): void;
+	/**
+	* Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+	* image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+	* lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+	* the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+	* 
+	* @param commands - one or more complete `ESC _ G … ESC \` sequences and nothing else
+	* @returns false, sending nothing, when `commands` holds anything but such sequences
+	*/
+	writeTerminalGraphics(commands: string): boolean;
 	copyToClipboard(text: string): void;
 	/**
 	* Copy text to the clipboard.
@@ -6596,6 +6642,8 @@ interface EditorAPI {
 	* rendering — the line containing `start - 1` (the fold "header")
 	* stays visible, while subsequent lines covered by the range are
 	* skipped.
+	* The header shows `placeholder` after its text (`...` without one;
+	* an empty string shows nothing).
 	*/
 	addFold(bufferId: number, start: number, end: number, placeholder?: string): boolean;
 	/**
@@ -6775,6 +6823,9 @@ interface EditorAPI {
 	*     `fg`/`bg`. Falls back to the theme's line-number fg.
 	*   * `composeOnly` — `true` draws the line only in a pane showing the
 	*     buffer in compose view, and hides it in every other pane.
+	*   * `clip` — `true` keeps the line on one row, cut at the pane's
+	*     edge, instead of soft-wrapping it: for a rule or a band drawn
+	*     the width of the pane (give it more text than any pane is wide).
 	* 
 	* @param position - Byte position to anchor the virtual line to
 	* @param above - Whether to insert above (true) or below (false) the line
@@ -7276,6 +7327,12 @@ interface EditorAPI {
 	*/
 	setBufferShowCursors(bufferId: number, show: boolean): boolean;
 	/**
+	* Name a buffer's tab: what it says instead of the file's name (a
+	* notebook's working copy shown as the notebook). `null` gives the tab
+	* its file's name back.
+	*/
+	setBufferTabLabel(bufferId: number, label: string | null): boolean;
+	/**
 	* Choose the grammar a virtual buffer is highlighted with.
 	* 
 	* Panel buffers are named `*<panel id>*`, which resolves to no
@@ -7616,6 +7673,19 @@ interface EditorAPI {
 	* `lsp_open_external_uri` hook instead of the core's fallback message.
 	*/
 	registerLspUriScheme(scheme: string): boolean;
+	/**
+	* Offer completions for a buffer: from now on the editor's completion requests on it (Ctrl+Space,
+	* or while typing when the popup shows by itself) fire the `completion_requested` hook, which
+	* the plugin answers with `supplyCompletions`; its items join the LSP's in the popup. Typing one
+	* of `triggerCharacters` (e.g. ".") asks at once.
+	*/
+	registerCompletionSource(bufferId: number, triggerCharacters: string): boolean;
+	/**
+	* Answer a `completion_requested` hook (an empty list is an answer too: the popup then
+	* shows the other sources alone). Answers to a request the editor has moved on from are
+	* dropped.
+	*/
+	supplyCompletions(requestId: number, items: PluginCompletionItem[]): boolean;
 	/**
 	* Mark the buffer backing `path` read-only. Race-free right after
 	* `openFile` because both are FIFO commands.
@@ -8804,6 +8874,7 @@ interface HookEventMap {
 	};
 	// ── mouse ────────────────────────────────────────────────────────────────
 	mouse_click: MouseClickHookArgs;
+	mouse_double_click: MouseClickHookArgs;
 	mouse_move: {
 		column: number;
 		row: number;
@@ -8893,6 +8964,16 @@ interface HookEventMap {
 		character: number;
 		language: string;
 		server_name: string;
+	};
+	/**
+	* The editor wants completions at `position` (a byte offset) in a buffer this plugin
+	* registered with `registerCompletionSource`. Answer with
+	* `editor.supplyCompletions(request_id, items)`.
+	*/
+	completion_requested: {
+		buffer_id: number;
+		request_id: number;
+		position: number;
 	};
 	// ── UI events ────────────────────────────────────────────────────────────
 	/** The user chose an action in a popup opened with `editor.showActionPopup`. */

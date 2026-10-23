@@ -120,6 +120,10 @@ fn lsp_range_overlaps(
 }
 
 const SEMANTIC_TOKENS_RANGE_DEBOUNCE_MS: u64 = 50;
+
+/// Stands for "a plugin" where `pending_completion_requests` names the server a request went to:
+/// a plugin's candidates have no server to resolve them against.
+pub(crate) const PLUGIN_COMPLETION_SOURCE: u64 = u64::MAX;
 const SEMANTIC_TOKENS_RANGE_PADDING_LINES: usize = 10;
 
 impl Editor {
@@ -185,7 +189,7 @@ impl Editor {
                 .map(|(ordinal, item)| LspCompletionCandidate {
                     id: format!("lsp:{response}:{ordinal}"),
                     item,
-                    server: Some(server),
+                    server: (server != PLUGIN_COMPLETION_SOURCE).then_some(server),
                 });
         match &mut self.active_window_mut().completion_items {
             Some(existing) => {
@@ -667,13 +671,15 @@ impl Editor {
         // crates/fresh-editor/tests/e2e/lsp_completion_duplicate_entries_1514.rs
         // and sinelaw/fresh#1514.
         if !self.active_window().pending_completion_requests.is_empty() {
-            let ids: Vec<u64> = self
+            let ids: Vec<(u64, u64)> = self
                 .active_window_mut()
                 .pending_completion_requests
                 .drain()
-                .map(|(request_id, _server)| request_id)
                 .collect();
-            for request_id in ids {
+            for (request_id, server) in ids {
+                if server == PLUGIN_COMPLETION_SOURCE {
+                    continue;
+                }
                 tracing::debug!(
                     "Canceling previous pending LSP completion request {}",
                     request_id
@@ -732,6 +738,21 @@ impl Editor {
         // Advance the ID counter past all allocated IDs
         self.active_window_mut().next_lsp_request_id = base_request_id + results.len() as u64;
 
+        // a plugin that offers completions for this buffer is asked too
+        if self.plugin_completion_sources.contains_key(&buffer_id) {
+            let request_id = self.active_window_mut().next_lsp_request_id;
+            self.active_window_mut().next_lsp_request_id += 1;
+            sent_ids.push((request_id, PLUGIN_COMPLETION_SOURCE));
+            self.plugin_manager.read().unwrap().run_hook(
+                "completion_requested",
+                crate::services::plugins::hooks::HookArgs::CompletionRequested {
+                    buffer_id,
+                    request_id,
+                    position: cursor_pos,
+                },
+            );
+        }
+
         if !sent_ids.is_empty() {
             self.active_window_mut()
                 .pending_completion_requests
@@ -788,6 +809,19 @@ impl Editor {
     /// This provides VS Code-like behavior where suggestions appear while typing,
     /// with debouncing to avoid spamming the LSP server.
     pub(crate) fn maybe_trigger_completion(&mut self, c: char) {
+        // A plugin's trigger characters (a `.` after a name, for a notebook's kernel) ask at once,
+        // whether or not the popup shows by itself: the plugin asked for them.
+        let buffer_id = self.active_buffer();
+        if self
+            .plugin_completion_sources
+            .get(&buffer_id)
+            .is_some_and(|chars| chars.contains(c))
+        {
+            self.active_window_mut().scheduled_completion_trigger = None;
+            self.request_completion();
+            return;
+        }
+
         // Auto-show must be enabled for any automatic triggering
         if !self.config.editor.completion_popup_auto_show {
             return;
@@ -1493,8 +1527,11 @@ impl Editor {
         use crate::view::virtual_text::VirtualTextPosition;
         use ratatui::style::{Color, Style};
 
-        // Clear existing inlay hints
-        state.virtual_texts.clear(&mut state.marker_list);
+        // Clear existing inlay hints (theirs only: plugins' virtual text in the buffer stays)
+        let namespace = crate::view::virtual_text::VirtualTextNamespace::inlay_hints();
+        state
+            .virtual_texts
+            .clear_namespace(&mut state.marker_list, &namespace);
 
         if hints.is_empty() {
             return;
@@ -1578,7 +1615,7 @@ impl Editor {
                 VirtualTextPosition::BeforeChar => crate::view::virtual_text::MarkerGravity::Left,
                 _ => crate::view::virtual_text::MarkerGravity::Right,
             };
-            state.virtual_texts.add_with_theme_keys(
+            let id = state.virtual_texts.add_with_theme_keys(
                 &mut state.marker_list,
                 byte_offset,
                 display_text,
@@ -1589,6 +1626,7 @@ impl Editor {
                 0, // Default priority
                 gravity,
             );
+            state.virtual_texts.set_namespace(id, namespace.clone());
         }
 
         tracing::debug!("Applied {} inlay hints as virtual text", hints.len());
@@ -4279,6 +4317,41 @@ mod tests {
         assert_eq!(vtexts.len(), 1);
         assert_eq!(vtexts[0].text, ": i32");
         assert_eq!(vtexts[0].position, VirtualTextPosition::AfterChar);
+    }
+
+    #[test]
+    fn test_inlay_hints_leave_other_virtual_text_alone() {
+        // A refresh replaces the previous hints, and only them: a plugin's virtual text in the
+        // same buffer (a notebook's cell margin, say) stays.
+        let mut state = EditorState::new(
+            80,
+            24,
+            crate::config::LARGE_FILE_THRESHOLD_BYTES as usize,
+            test_fs(),
+        );
+        state.buffer = Buffer::from_str_test("ab");
+        state.marker_list.adjust_for_insert(0, state.buffer.len());
+        state.virtual_texts.add_with_id(
+            &mut state.marker_list,
+            0,
+            "  ".to_string(),
+            ratatui::style::Style::default(),
+            VirtualTextPosition::BeforeChar,
+            0,
+            "plugin-pad".to_string(),
+        );
+
+        let hints = vec![make_hint(0, 1, ": i32", Some(InlayHintKind::TYPE))];
+        Editor::apply_inlay_hints_to_state(&mut state, &hints);
+        let hints = vec![make_hint(0, 1, ": str", Some(InlayHintKind::TYPE))];
+        Editor::apply_inlay_hints_to_state(&mut state, &hints);
+
+        let lookup = state
+            .virtual_texts
+            .build_lookup(&state.marker_list, 0, state.buffer.len());
+        assert_eq!(lookup.get(&0).map(|v| v[0].text.as_str()), Some("  "));
+        let hint: Vec<&str> = lookup[&1].iter().map(|v| v.text.as_str()).collect();
+        assert_eq!(hint, [": str"]);
     }
 
     #[test]

@@ -322,9 +322,10 @@ fn test_plugin_toggle_mouse_click_chip_matches_visual_position() {
     harness
         .send_key(KeyCode::Char('/'), KeyModifiers::NONE)
         .unwrap();
-    harness.type_text("AutoOpen").unwrap();
+    // the setting's path, so the search lands on dashboard's toggle and no other autoOpen
+    harness.type_text("dashboard/autoOpen").unwrap();
     harness.render().unwrap();
-    harness.assert_screen_contains("AutoOpen");
+    harness.assert_screen_contains("dashboard/autoOpen");
     harness
         .send_key(KeyCode::Enter, KeyModifiers::NONE)
         .unwrap();
@@ -496,11 +497,11 @@ fn test_settings_selection_indicator() {
     harness.render().unwrap();
 
     // Settings panel should show focus indicator ">" on selected item
-    // General category has: Orchestrator Mode (first item)
+    // General category has: Check For Updates (first item)
     // Format: ">  " (3-char indicator area: focus, modified, space)
     let screen = harness.screen_to_string();
     assert!(
-        screen.contains(">  Orchestrator Mode"),
+        screen.contains(">  Check For Updates"),
         "Focus indicator '>' should appear before focused item in settings panel. Screen:\n{}",
         screen
     );
@@ -509,12 +510,11 @@ fn test_settings_selection_indicator() {
     harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
 
-    // Now Check For Updates should have the focus indicator
-    // Format: ">  " (3-char indicator area: focus, modified, space)
+    // The focus indicator moved off Check For Updates to the next item
     let screen = harness.screen_to_string();
     assert!(
-        screen.contains(">  Check For Updates"),
-        "Focus indicator '>' should move to Check For Updates. Screen:\n{}",
+        !screen.contains(">  Check For Updates") && screen.contains("   Check For Updates"),
+        "Focus indicator '>' should move off Check For Updates. Screen:\n{}",
         screen
     );
 
@@ -2913,9 +2913,7 @@ fn test_settings_toggle_persists_after_save_and_reopen() {
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
 
-    // Navigate down to "Check For Updates" (second item in General)
-    harness.send_key(KeyCode::Down, KeyModifiers::NONE).unwrap();
-    harness.render().unwrap();
+    // "Check For Updates" is the first item in General, focused already
 
     // Verify we're on Check For Updates and it shows as unchecked [ ]
     // Format is ">  Check For Updates" (3-char indicator area: focus, modified, space)
@@ -3994,14 +3992,14 @@ fn test_usability_backtab_backward_navigation() {
     // Start in the tree. Tab enters the body at its selected card.
     harness.send_key(KeyCode::Tab, KeyModifiers::NONE).unwrap();
     harness.render().unwrap();
-    harness.assert_screen_contains(">  Orchestrator Mode");
+    harness.assert_screen_contains(">  Check For Updates");
 
     // Shift+Tab from the first card goes back to the tree.
     harness
         .send_key(KeyCode::BackTab, KeyModifiers::SHIFT)
         .unwrap();
     harness.render().unwrap();
-    harness.assert_screen_not_contains(">  Orchestrator Mode");
+    harness.assert_screen_not_contains(">  Check For Updates");
 
     // Shift+Tab from the tree wraps the ring to its last stop, Cancel, and
     // walks the footer backwards from there: Save, Reset, Layer, Edit.
@@ -4025,7 +4023,7 @@ fn test_usability_backtab_backward_navigation() {
         .unwrap();
     harness.render().unwrap();
     harness.assert_screen_not_contains(">[ Edit ]");
-    harness.assert_screen_contains(">  Orchestrator Mode");
+    harness.assert_screen_contains(">  Check For Updates");
 
     harness.send_key(KeyCode::Esc, KeyModifiers::NONE).unwrap();
 }

@@ -1508,6 +1508,7 @@
   "settings.option.clock": "时钟",
   "settings.option.remote": "远程指示器",
   "settings.option.trust": "工作区信任",
+  "settings.option.mode": "模式",
   "settings.editing_config": "正在编辑 %{layer} 配置：%{path}",
   "settings.failed_to_apply": "应用设置失败：%{error}",
   "settings.failed_to_open": "打开设置失败：%{error}",

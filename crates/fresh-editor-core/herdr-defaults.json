@@ -1,0 +1,64 @@
+{
+  "theme": "herdr",
+  "file_explorer": {
+    "tree_indicator_collapsed": "▸",
+    "tree_indicator_expanded": "▾"
+  },
+  "editor": {
+    "show_menu_bar": false,
+    "chrome_style": "herdr",
+    "status_bar": {
+      "left": [
+        "{mode}",
+        "{notebook:kernel}",
+        "{trust}",
+        "{terminal_restart}",
+        "{cursor}",
+        "{diagnostics}",
+        "{cursor_count}",
+        "{messages}"
+      ],
+      "right": [
+        "{read_only}",
+        "{line_ending}",
+        "{encoding}",
+        "{language}",
+        "{lsp}",
+        "{warnings}",
+        "{update}",
+        "{palette}"
+      ],
+      "separator": "·"
+    }
+  },
+  "lsp": {
+    "python": [
+      {
+        "command": "basedpyright-langserver",
+        "args": [
+          "--stdio"
+        ],
+        "enabled": true,
+        "auto_start": true,
+        "name": "basedpyright",
+        "root_markers": [
+          "pyproject.toml",
+          "setup.py",
+          "setup.cfg",
+          "pyrightconfig.json",
+          ".git"
+        ],
+        "initialization_options": {
+          "basedpyright": {
+            "analysis": {
+              "typeCheckingMode": "standard",
+              "diagnosticSeverityOverrides": {
+                "reportUnusedExpression": "none"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

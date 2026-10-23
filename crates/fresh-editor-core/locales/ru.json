@@ -1520,6 +1520,7 @@
   "settings.option.clock": "Часы",
   "settings.option.remote": "Удалённое подключение",
   "settings.option.trust": "Доверие рабочей области",
+  "settings.option.mode": "Режим",
   "settings.editing_config": "Редактирование конфигурации %{layer}: %{path}",
   "settings.failed_to_apply": "Не удалось применить настройки: %{error}",
   "settings.failed_to_open": "Не удалось открыть настройки: %{error}",

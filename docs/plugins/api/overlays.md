@@ -246,6 +246,9 @@ The `options` object accepts:
     `fg`/`bg`. Falls back to the theme's line-number fg.
   * `composeOnly` — `true` draws the line only in a pane showing the
     buffer in compose view, and hides it in every other pane.
+  * `clip` — `true` keeps the line on one row, cut at the pane's
+    edge, instead of soft-wrapping it: for a rule or a band drawn
+    the width of the pane (give it more text than any pane is wide).
 
 ```typescript
 addVirtualLine(bufferId: number, position: number, text: string, options: Record<string, unknown>, above: boolean, namespace: string, priority: number): boolean;
@@ -265,6 +268,25 @@ Force refresh of line display
 ```typescript
 refreshLines(bufferId: number): boolean;
 ```
+
+## Terminal Graphics
+
+### `writeTerminalGraphics`
+
+Send kitty graphics protocol commands to the terminal, ahead of the next frame: upload an
+image (`a=t`), place it (`a=p`, with `U=1` for Unicode placeholders drawn through virtual
+lines), delete it (`a=d`). Terminals without the protocol ignore them; nothing is sent in
+the GUI. Use `q=2` so the terminal's replies don't reach the editor as input.
+
+```typescript
+writeTerminalGraphics(commands: string): boolean;
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `commands` | one or more complete `ESC _ G … ESC \` sequences and nothing else |
+
+**Returns:** false, sending nothing, when `commands` holds anything but such sequences
 
 ## Conceals
 
@@ -371,6 +393,8 @@ Add a collapsed fold range. Hides bytes [start, end) from
 rendering — the line containing `start - 1` (the fold "header")
 stays visible, while subsequent lines covered by the range are
 skipped.
+The header shows `placeholder` after its text (`...` without one;
+an empty string shows nothing).
 
 ```typescript
 addFold(bufferId: number, start: number, end: number, placeholder?: string): boolean;
