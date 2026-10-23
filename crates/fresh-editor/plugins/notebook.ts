@@ -59,6 +59,10 @@ const CODE_FONT = editor.defineConfigString("markdownCodeFont", {
 });
 
 const MAX_OUTPUT_LINES = 40;
+/** The row under a cell that adds one below it: where a click lands says which kind (columns from
+ *  the text area's left edge, as a click reports them). */
+const ADDER = "   + code    + markdown";
+const adderKind = (col: number): string | null => (col >= 2 && col < 11 ? "code" : col >= 11 && col < 24 ? "markdown" : null);
 const NS_OUT = "notebook-out";
 const NS_RULE = "notebook-rule";
 const NS_CELL = "notebook-cell";
@@ -88,8 +92,13 @@ function duration(ms: number): string {
 }
 
 type Notebook = {
+  /** The .ipynb (or, for a script, the .py file itself: what nb serves, its folder's venv the kernel). */
   ipynb: string;
+  /** The buffer's file: the working copy, or the script. */
   copy: string;
+  /** A plain .py file with `# %%` cells (not a notebook): its cells run, but nothing is written into
+   *  it — no ids, no cell commands, no `save` to nb. */
+  script?: boolean;
   bufferId: number | null;
   processId: number;
   port: number;
@@ -110,12 +119,18 @@ type Notebook = {
   /** The text changed since the last redraw (its spans are out of date). */
   edited?: boolean;
   /** No cell is being edited, wherever the cursor is: on opening, and after Shift/Ctrl+Enter, so
-   *  markdown shows typeset (moving, clicking or typing ends it). */
+   *  markdown shows typeset (moving, a double click or typing ends it). */
   parked?: boolean;
+  /** Until then the cursor's moves are a single click's own (on a typeset cell): they don't end
+   *  `parked`. */
+  clickHoldUntil?: number;
   typeset?: Map<number, { cell: string; lines: MdLine[]; rowPx: number }>;
   /** The rows under a cell's last line (by its line number) that open its outputs in the browser:
    *  which of the virtual rows below the line they are. */
   links?: Map<number, { cell: string; rows: Set<number> }>;
+  /** The `+ code   + markdown` row under each cell, by the line it hangs from (as `links`): a click
+   *  on it adds a cell of that kind under the cell. */
+  adders?: Map<number, { cell: string; row: number }>;
   spans?: Span[];
   redraw?: number;
 };
@@ -251,6 +266,8 @@ export function cellsToText(cells: Cell[]): string {
         : quotable(c.source)
           ? `r"""\n${c.source}"""`
           : c.source.split("\n").map((l) => (l.length ? "# " + l : "#")).join("\n");
+      // (an empty code cell gets a blank line of its own: its box, and somewhere for the cursor)
+      if (c.kind === "code" && body === "") return markerLine(c) + "\n\n";
       return markerLine(c) + "\n" + body + (body.endsWith("\n") || body === "" ? "" : "\n");
     })
     .join("\n");
@@ -271,8 +288,10 @@ type Span = {
   quotes?: { open: number; openEnd: number; close: number; closeEnd: number };
 };
 
-/** The cells of percent-format text, with where each sits (byte offsets). */
-export function textToCells(text: string): Span[] {
+/** The cells of percent-format text, with where each sits (byte offsets). A cell without an `id=`
+ *  gets a new one, or with `ordinal` its place (`c0`, `c1`, …): a script's ids, which its file never
+ *  has, so its outputs stay with the cell from one redraw to the next. */
+export function textToCells(text: string, ordinal = false): Span[] {
   const lines = text.split("\n");
   const spans: Span[] = [];
   let offset = 0;
@@ -308,7 +327,14 @@ export function textToCells(text: string): Span[] {
     if (current.span.cell.kind !== "code") body = body.map((l) => l.replace(/^# ?/, ""));
     else body = body.map((l) => l.replace(HIDDEN_MAGIC, ""));
     current.span.cell.source = body.join("\n");
+    const first = current.span.lineStarts[0];
     current.span.lineStarts = current.span.lineStarts.filter((p) => p <= current!.span.lastLine);
+    // a code cell with only blank lines (a new one): its first line is its box's, to type on
+    if (current.span.cell.kind === "code" && body.length && !current.span.lineStarts.length && first !== undefined) {
+      current.span.lineStarts = [first];
+      current.span.lastLine = first;
+      current.span.lastEnd = current.ends[0];
+    }
     spans.push(current.span);
   };
   lines.forEach((line) => {
@@ -318,7 +344,7 @@ export function textToCells(text: string): Span[] {
       finish();
       current = {
         span: {
-          cell: { id: m[2] ?? newId(), kind: m[1] ?? "code", source: "" },
+          cell: { id: m[2] ?? (ordinal ? `c${spans.length}` : newId()), kind: m[1] ?? "code", source: "" },
           start: offset,
           markerEnd: lineEnd,
           lastLine: offset,
@@ -344,7 +370,7 @@ export function textToCells(text: string): Span[] {
     } else if (line.trim() !== "") {
       // text before the first marker: a code cell of its own
       current = {
-        span: { cell: { id: newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false, lineStarts: [offset] },
+        span: { cell: { id: ordinal ? `c${spans.length}` : newId(), kind: "code", source: "" }, start: offset, markerEnd: offset, lastLine: offset, lastEnd: lineEnd, end: lineEnd, hasId: false, lineStarts: [offset] },
         body: [line],
         ends: [lineEnd],
       };
@@ -393,9 +419,9 @@ async function ask(nb: Notebook, verb: string, req?: unknown): Promise<Record<st
   return JSON.parse(text);
 }
 
-function start(ipynb: string): Notebook {
+function start(ipynb: string, script = false): Notebook {
   const dir = editor.pathDirname(ipynb);
-  const chosen = chosenKernels()[ipynb];
+  const chosen = chosenKernel(ipynb);
   const args = ["serve", ipynb];
   if (chosen?.python) args.push("--python", chosen.python);
   else if (chosen?.kernel) args.push("--kernel", chosen.kernel);
@@ -404,7 +430,8 @@ function start(ipynb: string): Notebook {
   const ready = new Promise<void>((resolve) => (markReady = resolve));
   const nb: Notebook = {
     ipynb,
-    copy: workingCopyPath(ipynb),
+    copy: script ? ipynb : workingCopyPath(ipynb),
+    script,
     bufferId: null,
     processId: proc.processId,
     port: 0,
@@ -441,6 +468,11 @@ function chosenKernels(): Record<string, Choice> {
   } catch {
     return {};
   }
+}
+/** The kernel picked for `path`, however its path is spelled (`\\?\C:\…` and `C:\…` alike). */
+function chosenKernel(path: string): Choice | undefined {
+  const key = pathKey(path);
+  return Object.entries(chosenKernels()).find(([p]) => pathKey(p) === key)?.[1];
 }
 function rememberKernel(ipynb: string, choice: Choice): void {
   const all = chosenKernels();
@@ -648,6 +680,16 @@ function shortKernelName(name: string): string {
 
 function showKernel(nb: Notebook): void {
   if (nb.bufferId !== null) editor.setStatusBarValue(nb.bufferId, "kernel", kernelBadge(nb));
+}
+
+/** Before any cell runs, the kernel nb will start (the venv it found, or the one picked), so the bar
+ *  says which instead of "no kernel yet". */
+async function previewKernel(nb: Notebook): Promise<void> {
+  const r = await ask(nb, "kernels");
+  if (!r.ok || typeof r.current !== "string" || nb.kernel) return;
+  nb.kernelName = shortKernelName(r.current);
+  nb.kernel = "selected";
+  showKernel(nb);
 }
 
 // ── markdown cells: LaTeX as Unicode, inline marks ──────────────────
@@ -917,12 +959,13 @@ function snapshotImage(nb: Notebook, o: Output): Image | null {
       if (js !== undefined) prelude.push(Array.isArray(js) ? js.join("") : String(js));
     }
   }
-  // as wide as it will be shown, pixel for pixel
+  // laid out as wide as it will be shown, drawn at twice that: the terminal fits the picture to
+  // whole cells, and shrinking twice the pixels keeps it sharp where 1:1 would be stretched
   const [cw] = cellPixels();
   const pane = editor.getViewport()?.width ?? 80;
   const cols = Math.max(20, Math.min(IMAGE_MAX_COLUMNS, pane - 4));
-  void ask(nb, "snapshot", { output: o, prelude, width_px: cols * cw }).then((r) => {
-    const img = r.ok && typeof r.png === "string" ? sendImage(r.png, Number(r.width), Number(r.height)) : null;
+  void ask(nb, "snapshot", { output: o, prelude, width_px: cols * cw, scale: 2 }).then((r) => {
+    const img = r.ok && typeof r.png === "string" ? sendImage(r.png, Number(r.width), Number(r.height), 2) : null;
     if (!img) {
       converting.set(o, "failed");
       if (!r.ok) editor.debug(`notebook: snapshot: ${r.message}`);
@@ -1500,7 +1543,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   if (nb.redraw !== redraw || nb.bufferId !== buf) return;
   if (fixQuotes(buf, text)) text = await editor.getBufferText(buf);
   if (nb.redraw !== redraw || nb.bufferId !== buf) return;
-  const spans = textToCells(text);
+  const spans = textToCells(text, nb.script);
   editor.clearVirtualTextNamespace(buf, NS_OUT);
   editor.clearConcealNamespace(buf, NS_RULE);
   editor.clearNamespace(buf, NS_CELL);
@@ -1516,6 +1559,15 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
   nb.typeset = typeset;
   const links = new Map<number, { cell: string; rows: Set<number> }>();
   nb.links = links;
+  const adders = new Map<number, { cell: string; row: number }>();
+  nb.adders = adders;
+  // the row under a cell (its source, outputs or page) to add one below it with the mouse; a script
+  // gets none (its cells are `# %%` lines, typed)
+  const adder = (s: Span, lineStart: number, anchor: number, row: number) => {
+    if (nb.script) return;
+    editor.addVirtualLine(buf, anchor, ADDER, { fg: "editor.line_number_fg", clip: true }, false, NS_OUT, 100000);
+    adders.set(lineNo.get(lineStart) ?? -1, { cell: s.cell.id, row });
+  };
   // the line number of each line start, for the typeset cells' markers
   const lineNo = new Map<number, number>();
   // each line's text by its start (bytes), for the markdown cells
@@ -1554,9 +1606,11 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
     const bodyStart = sourceStart(s);
     const boxed = s.cell.kind === "code" || sourceVisible;
     // (the box's bottom band is the first row under the cell's last line, before any output)
-    const banded = boxed && (s.lastEnd > bodyStart || (!!s.quotes && s.lineStarts.length > 0));
+    const banded = boxed && (s.lastEnd > bodyStart || (!!s.quotes && s.lineStarts.length > 0) ||
+      (s.cell.kind === "code" && s.lineStarts.length > 0));
     if (banded) {
-      editor.addOverlay(buf, NS_CELL, bodyStart, s.lastEnd, { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
+      // (an empty cell's one blank line: its line break, so there's something to paint)
+      editor.addOverlay(buf, NS_CELL, bodyStart, Math.max(s.lastEnd, bodyStart + 1), { bg: "ui.notebook_cell_bg", extendToLineEnd: true });
       // half a row of the same ground above and below the source (the half blocks ▄ ▀ in the
       // cell's colour), so the box isn't cut at the text; clipped at the pane's edge, never wrapped
       const band = { fg: "ui.notebook_cell_bg", clip: true };
@@ -1581,6 +1635,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
             editor.addVirtualLine(buf, s.start, "   " + imageRow(img.cols, k), { fg, clip: true }, false, NS_OUT, 100 + row);
         }
         typeset.set(lineNo.get(s.start) ?? -1, { cell: s.cell.id, lines: md.lines, rowPx: page.rowPx });
+        adder(s, s.start, s.start, row);
       } else if (md && pending?.state === "pending" && last + 1 <= at) {
         // its page on the way: the source out of sight already, and the room the page took last
         // time (this notebook opened before), else a line saying so
@@ -1588,6 +1643,8 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
         const rows = knownPageRows(pending.key);
         if (rows) for (let k = 0; k < rows; k++) editor.addVirtualLine(buf, s.start, "", { fg: "editor.fg" }, false, NS_OUT, 100 + k);
         else editor.addVirtualLine(buf, s.start, "   typesetting…", { fg: "editor.line_number_fg" }, false, NS_OUT, 100);
+        // (its add row too, where the page's will be: nothing below moves when the page comes)
+        adder(s, s.start, s.start, rows || 1);
       } else {
         const formulaRows = renderMarkdown(nb, buf, s, lineAt, sourceVisible);
         if (sourceVisible && s.markerEnd > s.start) {
@@ -1615,7 +1672,13 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
         editor.addOverlay(buf, NS_MD, p + 2, p + bytes(line), { fg: "syntax.keyword" });
       }
     }
-    if (!r || s.cell.kind !== "code") return;
+    if (s.cell.kind !== "code") return;
+    // (under the bottom band: the first row under the last line)
+    const firstRow = banded ? 1 : 0;
+    if (!r) {
+      adder(s, s.lastLine, textStart(s.lastLine), firstRow);
+      return;
+    }
     // long text output is cut (unless expanded); image rows are never (half a plot helps nobody)
     let shown = 0;
     let more = 0;
@@ -1626,6 +1689,7 @@ async function decorate(nb: Notebook, cursorAt?: number): Promise<void> {
       return false;
     });
     if (more) out.push({ text: `… ${more} more lines (Notebook: Expand Output)`, fg: "editor.line_number_fg" });
+    adder(s, s.lastLine, textStart(s.lastLine), firstRow + out.length);
     if (!out.length) return;
     const opens = new Set(out.flatMap((l, j) => (l.open ? [j + (banded ? 1 : 0)] : [])));
     if (opens.size) links.set(lineNo.get(s.lastLine) ?? -1, { cell: s.cell.id, rows: opens });
@@ -1685,8 +1749,9 @@ function markdownCellAt(spans: Span[], pos: number): string | null {
 registerHandler("notebook_cursor_moved", (e: { buffer_id: number; old_position: number; new_position: number }) => {
   for (const nb of byCopy.values()) {
     if (nb.bufferId !== e.buffer_id || !nb.spans) continue;
-    // a move of the cursor (a key, a click) ends "no cell being edited"
-    if (nb.parked && e.old_position !== e.new_position) nb.parked = false;
+    // a move of the cursor (a key, a double click) ends "no cell being edited"; a single click's doesn't
+    const held = nb.clickHoldUntil !== undefined && Date.now() < nb.clickHoldUntil;
+    if (nb.parked && !held && e.old_position !== e.new_position) nb.parked = false;
     if (offTheQuotes(nb, e.old_position, e.new_position)) return;
     // (where the event says: the editor's own answer can still be the old place)
     if (markdownCellAt(nb.spans, e.new_position) !== nb.cursorCell) void decorate(nb, e.new_position);
@@ -1712,7 +1777,8 @@ function offTheQuotes(nb: Notebook, from: number, to: number): boolean {
 }
 editor.on("cursor_moved", "notebook_cursor_moved");
 
-// a click on a typeset cell: the cursor goes to the markdown under it
+// a click on a typeset cell selects it: it stays typeset, the cursor on its rule (as after
+// Shift+Enter). A double click edits it: the cursor goes to the markdown under it
 registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   if (e.button !== "left" || e.virtual_row === null || e.buffer_row === null) return;
   const nb = [...byCopy.values()].find((n) => n.bufferId === e.buffer_id);
@@ -1722,10 +1788,32 @@ registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
     await openInteractive(nb, link.cell);
     return;
   }
+  // a click on a cell's `+ code   + markdown` row: a cell of that kind under it
+  const add = nb?.adders?.get(e.buffer_row);
+  if (nb && add?.row === e.virtual_row) {
+    const kind = adderKind(e.virtual_col ?? -1);
+    if (kind) await editCells((cells, i) => (cells.splice(i + 1, 0, blank(kind)), i + 1), add.cell);
+    return;
+  }
+  const hit = nb?.typeset?.get(e.buffer_row);
+  const span = nb?.spans?.find((s) => s.cell.id === hit?.cell);
+  if (!nb || !hit || !span || nb.bufferId === null) return;
+  nb.parked = true;
+  // (the editor's own move of the cursor to the click comes after: it mustn't end `parked`)
+  nb.clickHoldUntil = Date.now() + 300;
+  editor.setBufferCursor(nb.bufferId, span.markerEnd);
+  await decorate(nb, span.markerEnd);
+});
+editor.on("mouse_click", "notebook_page_click");
+
+registerHandler("notebook_page_double_click", async (e: MouseClickHookArgs) => {
+  if (e.button !== "left" || e.clicks !== 2 || e.virtual_row === null || e.buffer_row === null) return;
+  const nb = [...byCopy.values()].find((n) => n.bufferId === e.buffer_id);
   const hit = nb?.typeset?.get(e.buffer_row);
   if (!nb || !hit) return;
-  // a click on a typeset cell edits it, whatever went before (Shift+Enter, opening)
+  // a double click on a typeset cell edits it, whatever went before (Shift+Enter, opening)
   nb.parked = false;
+  nb.clickHoldUntil = undefined;
   // (the page's pixels per terminal pixel: rowPx is a row's height in its pixels)
   const [cw, ch] = cellPixels();
   const r = await ask(nb, "mdjump", {
@@ -1741,7 +1829,7 @@ registerHandler("notebook_page_click", async (e: MouseClickHookArgs) => {
   // (the plugin's own cursor move fires no cursor_moved: the redraw that shows the source is here)
   await decorate(nb, line.buf + offset - line.md);
 });
-editor.on("mouse_click", "notebook_page_click");
+editor.on("mouse_double_click", "notebook_page_double_click");
 
 /** Opens a code cell's outputs in the browser, as a page nb makes (with the scripts earlier cells
  *  output: Bokeh's loader, for one). */
@@ -1774,6 +1862,80 @@ registerHandler("notebook_open_interactive", async () => {
   if (s) await openInteractive(nb, s.cell.id);
 });
 editor.registerCommand("Notebook: Open Output in Browser", "This cell's outputs as a web page: interactive charts (Plotly, Altair, Bokeh), maps (Alt+O)", "notebook_open_interactive", "notebook");
+
+// ── a cell's output as text, to copy or select ──────────────────────
+//
+// Outputs are drawn as virtual lines, which the editor's selection doesn't reach: Alt+C copies the
+// cell's output as plain text (a traceback included, without its colours), and "Output as Text"
+// shows it in a read-only buffer below, to select any part of it.
+
+/** A cell's outputs as plain text: streams, tracebacks, and results' text/plain. */
+function runText(r: Run): string {
+  const text = (v: unknown) => (Array.isArray(v) ? v.join("") : typeof v === "string" ? v : "");
+  return r.outputs.map((o) => {
+    if (o.output_type === "stream") return text(o.text);
+    if (o.output_type === "error") {
+      const tb = Array.isArray(o.traceback) ? (o.traceback as string[]).join("\n") : `${o.ename}: ${o.evalue}`;
+      return tb + "\n";
+    }
+    const data = (o.data ?? {}) as Record<string, unknown>;
+    const plain = text(data["text/plain"]);
+    return plain ? plain + "\n" : "";
+  }).map(stripAnsi).join("").replace(/\n+$/, "");
+}
+
+/** The cell under the cursor and its output's text; null (and a message) when it has none. */
+async function outputAtCursor(): Promise<{ nb: Notebook; cell: number; text: string } | null> {
+  const nb = active();
+  if (!nb) return null;
+  const { spans, i } = await cellsAtCursor(nb);
+  const r = spans[i] ? nb.runs.get(spans[i].cell.id) : undefined;
+  const text = r ? runText(r) : "";
+  if (!text) {
+    editor.setStatus("notebook: this cell has no text output");
+    return null;
+  }
+  return { nb, cell: i + 1, text };
+}
+
+registerHandler("notebook_copy_output", async () => {
+  const o = await outputAtCursor();
+  if (!o) return;
+  editor.setClipboard(o.text);
+  const lines = o.text.split("\n").length;
+  editor.setStatus(`notebook: copied cell ${o.cell}'s output (${lines} line${lines === 1 ? "" : "s"})`);
+});
+
+editor.defineMode("notebook-output", [
+  ["q", "notebook_output_close"],
+  ["Escape", "notebook_output_close"],
+], true);
+let outputBuffer: number | null = null;
+
+registerHandler("notebook_output_text", async () => {
+  const o = await outputAtCursor();
+  if (!o) return;
+  if (outputBuffer !== null) editor.closeBuffer(outputBuffer, true);
+  const { bufferId } = await editor.createVirtualBufferInSplit({
+    name: `*Output of cell ${o.cell}*`,
+    mode: "notebook-output",
+    readOnly: true,
+    editingDisabled: true,
+    showLineNumbers: false,
+    direction: "horizontal",
+    ratio: 0.6,
+    entries: [{ text: o.text + "\n" }],
+  });
+  outputBuffer = bufferId;
+  editor.setStatus("notebook: select with the mouse or Shift+arrows, Ctrl+C copies; q closes");
+});
+registerHandler("notebook_output_close", () => {
+  if (outputBuffer !== null) editor.closeBuffer(outputBuffer, true);
+  outputBuffer = null;
+});
+
+editor.registerCommand("Notebook: Copy Output", "Copy this cell's output as plain text, a traceback included (Alt+C)", "notebook_copy_output", "notebook");
+editor.registerCommand("Notebook: Output as Text", "This cell's output in a read-only buffer below, to select any part of it", "notebook_output_text", "notebook");
 
 // ── opening, saving, closing ─────────────────────────────────────────
 
@@ -1840,6 +2002,7 @@ function copyOpened(nb: Notebook, buffer: number): void {
   // the kernel's completions, asked at once after a `.`
   editor.registerCompletionSource(buffer, ".");
   showKernel(nb);
+  void previewKernel(nb);
   if (nb.jsonBuffer !== null) editor.closeBuffer(nb.jsonBuffer, true);
   nb.jsonBuffer = null;
   followMode();
@@ -1918,6 +2081,8 @@ editor.on("after_file_open", "notebook_after_open");
 /** Gives every cell an id in the buffer (a new `# %%` line has none), so outputs stay attached. */
 async function cellsWithIds(nb: Notebook): Promise<Span[]> {
   const buf = nb.bufferId!;
+  // (a script's file is the user's: its cells go by their place instead)
+  if (nb.script) return textToCells(await editor.getBufferText(buf), true);
   let spans = textToCells(await editor.getBufferText(buf));
   const missing = spans.filter((s) => !s.hasId && s.markerEnd > s.start);
   // from the end, so earlier offsets stay right
@@ -1928,7 +2093,8 @@ async function cellsWithIds(nb: Notebook): Promise<Span[]> {
 
 registerHandler("notebook_after_save", async (e: { path: string }) => {
   const nb = byCopy.get(pathKey(e.path));
-  if (!nb || nb.bufferId === null) return;
+  // (a script saves itself: it's the file)
+  if (!nb || nb.bufferId === null || nb.script) return;
   const spans = await cellsWithIds(nb);
   const r = await ask(nb, "save", { cells: spans.map((s) => s.cell) });
   editor.setStatus(r.ok ? `Saved ${editor.pathBasename(nb.ipynb)}` : `notebook: not saved: ${r.message}`);
@@ -1936,6 +2102,9 @@ registerHandler("notebook_after_save", async (e: { path: string }) => {
 editor.on("after_file_save", "notebook_after_save");
 
 registerHandler("notebook_on_close", (e: { buffer_id: number }) => {
+  // the buffer that comes to the front has no activation of its own (a notebook's JSON view closed
+  // under its working copy, say): its mode once the close has settled
+  editor.setTimeout(30, "notebook_mode_refresh");
   for (const nb of byCopy.values()) {
     if (nb.bufferId !== e.buffer_id) continue;
     void ask(nb, "shutdown");
@@ -2162,16 +2331,29 @@ async function cellsAtCursor(nb: Notebook): Promise<{ text: string; spans: Span[
 
 /** Rewrites the cells (`edit` changes the list and says which cell the cursor goes to), puts the
  *  cursor at the start of that cell's source, and redraws. */
-async function editCells(edit: (cells: Cell[], i: number, offset: number) => number | null): Promise<void> {
+async function editCells(edit: (cells: Cell[], i: number, offset: number) => number | null, cellId?: string): Promise<void> {
   const nb = active();
   if (!nb) return;
-  const { text, spans, i, offset } = await cellsAtCursor(nb);
+  if (nb.script) {
+    editor.setStatus("python: cell commands are for notebooks; in a script, type a `# %%` line to start a cell");
+    return;
+  }
+  let { text, spans, i, offset } = await cellsAtCursor(nb);
+  // (a cell named by a click, not the one at the cursor)
+  const k = cellId ? spans.findIndex((s) => s.cell.id === cellId) : -1;
+  if (k >= 0) [i, offset] = [k, 0];
   const cells = spans.map((s) => ({ ...s.cell }));
   const target = edit(cells, i, offset);
   if (target === null) return;
   if (cells.length === 0) cells.push({ id: newId(), kind: "code", source: "" });
   const next = cellsToText(cells);
   replaceText(nb.bufferId!, text, next);
+  // (the redraw below can read the text before the edit has landed, and the plugin's own edit
+  // brings no buffer_modified: one more, once it has)
+  if (!pending) {
+    pending = true;
+    editor.setTimeout(120, "notebook_redraw");
+  }
   const at = textToCells(next)[Math.max(0, Math.min(target, cells.length - 1))];
   if (at) editor.setBufferCursor(nb.bufferId!, sourceStart(at));
   await decorate(nb, at ? sourceStart(at) : undefined);
@@ -2292,18 +2474,23 @@ editor.registerCommand("Notebook: Interrupt Kernel", "Stop the running cell (and
 editor.registerCommand("Notebook: Restart Kernel", "Stop the kernel, even mid-cell; the next run starts a new one", "notebook_restart", "notebook");
 
 // Shift+Enter / Ctrl+Enter in a notebook; everything else types and edits as usual.
-// Alt+Enter too: without an extended keyboard protocol a terminal sends Shift+Enter as plain Enter.
+// Alt+Enter and Ctrl+J too: herdr passes Shift+Enter and Ctrl+Enter on as plain Enter whatever the
+// terminal sends, so WezTerm (wr's wezterm.lua) sends them as `ESC CR` (Alt+Enter) and LF (Ctrl+J),
+// which get through.
 editor.defineMode("notebook", [
   ["S-Enter", "notebook_run_advance"],
   ["M-Enter", "notebook_run_advance"],
   ["C-Enter", "notebook_run_stay"],
+  ["C-j", "notebook_run_stay"],
   ["M-k", "notebook_docs"],
   ["M-a", "notebook_insert_above"],
   ["M-b", "notebook_insert_below"],
   ["M-m", "notebook_insert_markdown_below"],
   ["M-r", "notebook_run_all"],
   ["M-o", "notebook_open_interactive"],
+  ["M-c", "notebook_copy_output"],
   ["F1", "notebook_shortcuts"],
+  ["F5", "python_run_file"],
   ["M-S-Up", "notebook_move_up"],
   ["M-S-Down", "notebook_move_down"],
 ], false);
@@ -2315,7 +2502,7 @@ registerHandler("notebook_shortcuts", () => {
   if (!nb || nb.bufferId === null) return;
   editor.showActionPopup({
     id: "notebook-actions", buffer_id: nb.bufferId, title: "Notebook shortcuts",
-    message: "Shift+Enter / Alt+Enter: run and advance\nCtrl+Enter: run and stay\nAlt+B: code below   Alt+A: code above\nAlt+M: markdown below   Alt+R: run all\nAlt+O: open this cell's output in the browser (interactive charts)\nAlt+Shift+Up/Down: move cell   Ctrl+S: save\nF1: this index   Ctrl+P, Notebook: all actions\nClick markdown to edit; leave its cell to render it.",
+    message: "Shift+Enter / Alt+Enter: run and advance\nCtrl+Enter (or Ctrl+J): run and stay\nAlt+B: code below   Alt+A: code above\nAlt+M: markdown below   Alt+R / F5: run all\nAlt+O: open this cell's output in the browser (interactive charts)\nAlt+C: copy this cell's output   Ctrl+P, Notebook: Output as Text\nAlt+Shift+Up/Down: move cell   Ctrl+S: save\nF1: this index   Ctrl+P, Notebook: all actions\nDouble-click markdown to edit; leave its cell to render it.",
     actions: [
       { id: "notebook_insert_below", label: "Code below (Alt+B)" },
       { id: "notebook_insert_markdown_below", label: "Markdown below (Alt+M)" },
@@ -2360,6 +2547,123 @@ registerHandler("notebook_font_chosen", async (e: { prompt_type: string; input: 
 });
 editor.on("prompt_confirmed", "notebook_font_chosen");
 editor.registerCommand("Notebook: Select Markdown Font", "Choose an installed font for notebook prose/headings (remembered)", "notebook_select_font", "notebook");
+// ── Python scripts: `# %%` cells, and the whole file ─────────────────
+//
+// A .py file runs too, two ways. Its `# %%` cells (the percent format VS Code, Spyder and PyCharm
+// run) like a notebook's: Shift/Alt+Enter, Ctrl+Enter, Alt+R, the outputs under each cell, on a
+// kernel in the file's venv — the file itself stays as written (no ids, nothing saved into it).
+// And the whole file, F5: `python file.py` in a terminal below, on the same venv's python.
+
+/** The active buffer's path when it's a Python file that isn't a notebook's working copy. */
+function activePython(): { buffer: number; path: string } | null {
+  const buffer = editor.getActiveBufferId();
+  const path = buffer ? editor.getBufferPath(buffer) : "";
+  if (!path || !/\.pyw?$/i.test(path) || notebookOfCopy(path) !== null) return null;
+  return { buffer, path };
+}
+
+editor.defineMode("python-script", [
+  ["S-Enter", "python_run_advance"],
+  ["M-Enter", "python_run_advance"],
+  ["C-Enter", "python_run_stay"],
+  ["C-j", "python_run_stay"],
+  ["M-r", "python_run_all"],
+  ["F5", "python_run_file"],
+], false);
+
+/** The script session of the active .py file, started (nb serving the file) the first time one of
+ *  its cells runs; null, and a hint, when the file has no `# %%` cells. */
+async function scriptSession(): Promise<Notebook | null> {
+  const known = active();
+  if (known) return known;
+  const py = activePython();
+  if (!py) return null;
+  if (!/^# %%/m.test(await editor.getBufferText(py.buffer))) {
+    editor.setStatus("python: no cells here. A `# %%` line starts one (Shift/Alt+Enter runs it); F5 runs the whole file");
+    return null;
+  }
+  const nb = start(py.path, true);
+  byCopy.set(pathKey(py.path), nb);
+  nb.bufferId = py.buffer;
+  nb.parked = true;
+  watchCellPixels();
+  editor.registerCompletionSource(py.buffer, ".");
+  showKernel(nb);
+  void previewKernel(nb);
+  followMode();
+  return nb;
+}
+
+registerHandler("python_run_advance", async () => {
+  if (await scriptSession()) await runAtCursor(true);
+});
+registerHandler("python_run_stay", async () => {
+  if (await scriptSession()) await runAtCursor(false);
+});
+registerHandler("python_run_all", async () => {
+  const nb = await scriptSession();
+  if (nb) await runCells(nb, await cellsWithIds(nb));
+});
+
+/** The python of the venv nearest `dir` (`.venv`, `venv` or `env`, going up to the repo root, as nb
+ *  looks for a kernel), else the one on PATH. */
+function venvPython(dir: string): string {
+  const windows = (editor.getEnv("OS") ?? "").toLowerCase().includes("windows");
+  const root = repoRoot(dir);
+  for (let d = dir; ; ) {
+    for (const name of [".venv", "venv", "env"]) {
+      const py = windows ? editor.pathJoin(d, name, "Scripts", "python.exe") : editor.pathJoin(d, name, "bin", "python");
+      if (editor.fileExists(py)) return py;
+    }
+    const up = editor.pathDirname(d);
+    if (!root || pathKey(d) === pathKey(root) || !up || pathKey(up) === pathKey(d)) break;
+    d = up;
+  }
+  return windows ? "python" : "python3";
+}
+
+/** The terminal the last F5 ran in, closed when the next one starts. */
+let runTerminal: number | null = null;
+
+// F5: the whole file, in a terminal below (a notebook's F5 runs all its cells)
+registerHandler("python_run_file", async () => {
+  const nb = active();
+  if (nb && !nb.script) {
+    await runCells(nb, await cellsWithIds(nb));
+    return;
+  }
+  const py = activePython();
+  if (!py) {
+    editor.setStatus("python: F5 runs a .py file");
+    return;
+  }
+  // the file as it is on screen
+  if (editor.isBufferModified(py.buffer)) editor.saveBufferToPath(py.buffer, py.path);
+  const dir = editor.pathDirname(py.path);
+  const python = chosenKernel(py.path)?.python ?? venvPython(dir);
+  if (runTerminal !== null) editor.closeBuffer(runTerminal, true);
+  runTerminal = null;
+  try {
+    const t = await editor.createTerminal({
+      command: [python, "-u", py.path],
+      cwd: dir,
+      title: `▶ ${editor.pathBasename(py.path)}`,
+      direction: "horizontal",
+      ratio: 0.65,
+      focus: false,
+    });
+    runTerminal = t.bufferId;
+    editor.setStatus(`python: running ${editor.pathBasename(py.path)} on ${python}`);
+  } catch (err) {
+    editor.setStatus(`python: can't run ${editor.pathBasename(py.path)}: ${err}`);
+  }
+});
+
+editor.registerCommand("Python: Run File", "Run this .py file in a terminal below, on its venv's python (F5)", "python_run_file", "python-script");
+editor.registerCommand("Python: Run Cell", "Run the `# %%` cell under the cursor and move to the next (Shift/Alt+Enter)", "python_run_advance", "python-script");
+editor.registerCommand("Python: Run Cell and Stay", "Run the `# %%` cell under the cursor (Ctrl+Enter)", "python_run_stay", "python-script");
+editor.registerCommand("Python: Run All Cells", "Run every `# %%` cell, top to bottom (Alt+R)", "python_run_all", "python-script");
+
 for (const [label, action] of [
   ["Notebook: Code Cell Below (Alt+B)", "notebook_insert_below"],
   ["Notebook: Markdown Cell Below (Alt+M)", "notebook_insert_markdown_below"],
@@ -2369,11 +2673,16 @@ for (const [label, action] of [
 
 function followMode(): void {
   const nb = active();
+  const py = !nb && activePython() !== null;
   editor.setContext("notebook", nb !== null);
+  editor.setContext("python-script", py || !!nb?.script);
   const mode = editor.getEditorMode();
-  if (nb && mode == null && editor.getInputMode() == null) editor.setEditorMode("notebook");
-  else if (!nb && mode === "notebook") editor.setEditorMode(null);
+  const want = nb ? "notebook" : py ? "python-script" : null;
+  if (want && mode !== want && (mode == null || mode === "notebook" || mode === "python-script") && editor.getInputMode() == null)
+    editor.setEditorMode(want);
+  else if (!want && (mode === "notebook" || mode === "python-script")) editor.setEditorMode(null);
 }
+registerHandler("notebook_mode_refresh", () => followMode());
 registerHandler("notebook_mode_follow", () => {
   followMode();
   // a notebook previewed from the explorer fires no after_file_open: its JSON tab coming to the

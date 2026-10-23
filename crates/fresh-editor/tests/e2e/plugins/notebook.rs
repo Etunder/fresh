@@ -111,6 +111,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                               '<tbody><tr><th>0</th><td>Alpha &amp; Co</td><td>1.5</td></tr>'
                                               '<tr><th>1</th><td>Beta</td><td>-12.25</td></tr></tbody></table>'
                                               '<p>2 rows × 2 columns</p></div>'}}})
+                elif req["code"].startswith("boom"):
+                    emit({"event": "output", "cell": req["cell"],
+                          "output": {"output_type": "error", "ename": "ZeroDivisionError", "evalue": "division by zero",
+                                     "traceback": ["[31mTraceback (most recent call last)[0m",
+                                                   "  Cell In[1], line 1", "[31mZeroDivisionError[0m: division by zero"]}})
+                    emit({"event": "done", "cell": req["cell"], "status": "error", "execution_count": count[0]})
+                    self.send_response(200)
+                    data = json.dumps(body).encode()
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
                 elif req["code"].startswith("plot"):
                     emit({"event": "output", "cell": req["cell"],
                           "output": {"output_type": "display_data", "metadata": {},
@@ -250,7 +262,8 @@ fn a_notebook_opens_as_cells_runs_a_cell_and_saves_back() {
         s.contains("print('hello')") && s.contains("── 2 [ ]")
     })
     .unwrap();
-    h.wait_until(|h| h.get_status_bar().contains("○ no kernel yet"))
+    // before any cell runs, the kernel nb will start (the stand-in's venv)
+    h.wait_until(|h| h.get_status_bar().contains("○ Python (.venv) not started"))
         .unwrap();
     // the tab is the notebook's name, not its working copy's
     h.wait_until(|h| h.screen_to_string().contains(" report.ipynb "))
@@ -651,11 +664,12 @@ fn an_interactive_output_opens_in_the_browser() {
     // run the chart cell
     h.send_key(KeyCode::End, KeyModifiers::CONTROL).unwrap();
     h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
-    // what it is while its picture is taken; then the picture (the stand-in's 80x48 PNG: 3 rows)
+    // what it is while its picture is taken; then the picture (the stand-in's 80x48 PNG, taken at
+    // twice the pixels: 40x24 at herdr's 8x16, 2 rows)
     let placeholder = '\u{10EEEE}';
     h.wait_until(|h| {
         let s = h.screen_to_string();
-        s.lines().filter(|l| l.contains(placeholder)).count() == 3
+        s.lines().filter(|l| l.contains(placeholder)).count() == 2
             && s.contains("open interactive in the browser")
     })
     .unwrap();
@@ -666,6 +680,7 @@ fn an_interactive_output_opens_in_the_browser() {
         "Returns"
     );
     assert_eq!(shot["prelude"], serde_json::json!(["window.loaded = 1;"]));
+    assert_eq!(shot["scale"], 2, "taken at twice the pixels, to stay sharp");
     assert!(shot["width_px"].as_u64().unwrap() >= 160);
     let screen = h.screen_to_string();
     // the first cell's output is a loader script: nothing to show, as in Jupyter
@@ -787,10 +802,21 @@ fn a_previewed_notebook_shows_as_cells() {
     h.editor_mut().open_file_preview(&nb_path).unwrap();
     h.wait_until(shows_cells).unwrap();
 
-    // previewed again while open: still the one view
-    h.editor_mut().open_file_preview(&nb_path).unwrap();
-    h.wait_until(shows_cells).unwrap();
+    // previewed again while open, again and again (clicks in the explorer): still the one view,
+    // and still in the notebook's mode once that has settled — its JSON view closing under it
+    // mustn't leave its keys to the editor's (Alt+A was search and replace)
+    for _ in 0..4 {
+        h.editor_mut().open_file_preview(&nb_path).unwrap();
+        h.wait_until(shows_cells).unwrap();
+    }
+    for _ in 0..10 {
+        h.tick_and_render().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    h.send_key(KeyCode::Char('b'), KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("── 3 [ ]"))
         .unwrap();
     h.assert_no_plugin_errors();
 }
@@ -1155,9 +1181,10 @@ fn input_is_asked_in_a_prompt() {
 }
 
 /// A markdown cell the cursor isn't in shows typeset (nb's page, as image rows, its source folded
-/// away); a click on the page puts the cursor on the markdown under it, and the source shows.
+/// away); a single click on the page leaves it typeset, a double click puts the cursor on the
+/// markdown under it, and the source shows.
 #[test]
-fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
+fn markdown_cells_are_typeset_and_a_double_click_goes_to_the_source() {
     if !python3_available() {
         eprintln!("Skipping: no python3 for the stand-in nb");
         return;
@@ -1193,13 +1220,24 @@ fn markdown_cells_are_typeset_and_a_click_goes_to_the_source() {
         "the cell's markdown, without its `# `"
     );
 
-    // a click on the page's second row: the cursor goes to "words", in the source
     let screen = h.screen_to_string();
     let row = screen
         .lines()
         .position(|l| l.contains('\u{10EEEE}'))
         .unwrap() as u16
         + 1;
+    // a single click on the page: still typeset, the cursor on the cell's rule
+    h.mouse_click(20, row).unwrap();
+    let text = h.get_buffer_content().unwrap();
+    let rule_end = text.find("[markdown] id=intro").unwrap() + "[markdown] id=intro".len();
+    h.wait_until(|h| h.cursor_position() == rule_end).unwrap();
+    let screen = h.screen_to_string();
+    assert!(
+        !screen.contains("Some words")
+            && screen.lines().filter(|l| l.contains('\u{10EEEE}')).count() == 3,
+        "{screen}"
+    );
+    // a second click there (a double click): the cursor goes to "words", in the source
     h.mouse_click(20, row).unwrap();
     // its source, in a cell box like a code cell's (a band of half blocks above it, two columns of
     // the cell's ground before each line)
@@ -1502,8 +1540,8 @@ fn a_typesetting_cell_holds_its_place() {
 }
 
 /// Ctrl+Enter and Shift+Enter in a markdown cell (the last one here: there's no cell to go on to)
-/// typeset it; the cursor rests on its rule, which stays a rule, the cell's id out of reach. A click
-/// on the page edits it again, as many times as it's typeset.
+/// typeset it; the cursor rests on its rule, which stays a rule, the cell's id out of reach. A double
+/// click on the page edits it again, as many times as it's typeset.
 #[test]
 fn the_run_keys_typeset_a_markdown_cell() {
     if !python3_available() {
@@ -1532,7 +1570,7 @@ fn the_run_keys_typeset_a_markdown_cell() {
         let s = h.screen_to_string();
         s.lines().filter(|l| l.contains(placeholder)).count() == 3 && !s.contains("Some words")
     };
-    // (each time somewhere else: two quick clicks in one place are a double click)
+    // (each time somewhere else, so the last double click's second click doesn't start this one)
     let edit = |h: &mut EditorTestHarness, col: u16| {
         let row = h
             .screen_to_string()
@@ -1540,6 +1578,7 @@ fn the_run_keys_typeset_a_markdown_cell() {
             .position(|l| l.contains('\u{10EEEE}'))
             .unwrap() as u16
             + 1;
+        h.mouse_click(col, row).unwrap();
         h.mouse_click(col, row).unwrap();
         h.wait_until(|h| h.screen_to_string().contains("Some words here."))
             .unwrap();
@@ -1563,5 +1602,255 @@ fn the_run_keys_typeset_a_markdown_cell() {
             "{screen}"
         );
     }
+    h.assert_no_plugin_errors();
+}
+
+/// A plain .py file with `# %%` cells runs like a notebook: Alt+Enter runs the cell under the cursor
+/// (nb serving the file itself) and moves to the next, its output under it; the file stays as
+/// written — no ids go into it, and saving it sends nothing to nb.
+#[test]
+fn a_python_scripts_percent_cells_run_and_it_stays_as_written() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let script = project.join("analysis.py");
+    let source = "import os\n\n# %%\nx = 1\n\n# %%\ny = 2\n";
+    fs::write(&script, source).unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&script).unwrap();
+    h.wait_until(|h| h.get_status_bar().contains("PYTHON SCRIPT"))
+        .unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
+    // the lines before the first `# %%` are a cell, then each `# %%` starts one
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("ran: import os"))
+        .unwrap();
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("ran: x = 1"))
+        .unwrap();
+    // Ctrl+J runs and stays (herdr's Ctrl+Enter): the cursor is in the third cell now
+    h.send_key(KeyCode::Char('j'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("ran: y = 2"))
+        .unwrap();
+    let screen = h.screen_to_string();
+    assert!(
+        screen.contains("ran: import os") && screen.contains("ran: x = 1"),
+        "the earlier cells keep their outputs: {screen}"
+    );
+    assert_eq!(
+        h.get_buffer_content().unwrap(),
+        source,
+        "no ids in the file"
+    );
+    h.send_key(KeyCode::Char('s'), KeyModifiers::CONTROL)
+        .unwrap();
+    assert_eq!(fs::read_to_string(&script).unwrap(), source);
+    assert!(
+        !project.join("saved.json").exists(),
+        "a script isn't saved through nb"
+    );
+    h.assert_no_plugin_errors();
+}
+
+/// A .py file without cells runs nothing on Alt+Enter, and F5 runs the whole file in a terminal, on the
+/// python of the venv next to it.
+#[test]
+fn f5_runs_a_python_file_on_its_venv() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let bin = project.join(".venv").join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    // the venv's python: says what it was asked to run
+    let python = bin.join("python");
+    fs::write(
+        &python,
+        "#!/bin/sh\necho \"venv python got: $*\"\nsleep 30\n",
+    )
+    .unwrap();
+    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+    let script = project.join("hello.py");
+    fs::write(&script, "print('hello')\n").unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&script).unwrap();
+    // (its keys once the plugin has seen the file: the status bar says the mode)
+    h.wait_until(|h| h.get_status_bar().contains("PYTHON SCRIPT"))
+        .unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
+    // (no cells: Alt+Enter only says how to make one, in the status message these tests leave out)
+    h.send_key(KeyCode::Enter, KeyModifiers::ALT).unwrap();
+    assert_eq!(h.get_buffer_content().unwrap(), "print('hello')\n");
+    h.send_key(KeyCode::F(5), KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("venv python got: -u") && s.contains("hello.py")
+    })
+    .unwrap();
+    h.assert_no_plugin_errors();
+}
+
+/// A cell's output is virtual lines the editor can't select: Alt+C copies it as plain text (a
+/// traceback without its colours), and "Notebook: Output as Text" shows it in a read-only buffer
+/// to select from, which q closes.
+#[test]
+fn a_cells_output_is_copied_and_shown_as_text() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let script = project.join("broken.py");
+    fs::write(&script, "# %%\nboom = 1 / 0\n").unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&script).unwrap();
+    h.wait_until(|h| h.get_status_bar().contains("PYTHON SCRIPT"))
+        .unwrap();
+    h.send_key(KeyCode::Home, KeyModifiers::CONTROL).unwrap();
+    h.send_key(KeyCode::Char('j'), KeyModifiers::CONTROL)
+        .unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("ZeroDivisionError"))
+        .unwrap();
+    h.send_key(KeyCode::Char('c'), KeyModifiers::ALT).unwrap();
+    // (the copy happens in the plugin's own time)
+    let want = "Traceback (most recent call last)\n  Cell In[1], line 1\nZeroDivisionError: division by zero";
+    let mut copied = String::new();
+    for _ in 0..100 {
+        copied = h.editor_mut().clipboard_content_for_test();
+        if copied == want {
+            break;
+        }
+        h.tick_and_render().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(copied, want);
+
+    palette(&mut h, "Notebook: Output as Text");
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("*Output of cell 1*") && s.contains("Cell In[1], line 1")
+    })
+    .unwrap();
+    h.send_key(KeyCode::Char('q'), KeyModifiers::NONE).unwrap();
+    h.wait_until(|h| !h.screen_to_string().contains("*Output of cell 1*"))
+        .unwrap();
+    assert_eq!(fs::read_to_string(&script).unwrap(), "# %%\nboom = 1 / 0\n");
+    h.assert_no_plugin_errors();
+}
+
+/// Under each cell a `+ code   + markdown` row adds a cell of that kind below it with a click (a
+/// typeset markdown cell's too: the stand-in typesets none here).
+#[test]
+fn a_cell_is_added_with_the_mouse() {
+    if !python3_available() {
+        eprintln!("Skipping: no python3 for the stand-in nb");
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let nb_path = project.join("report.ipynb");
+    // (markdown the stand-in typesets: its page, and the add row under it)
+    fs::write(
+        &nb_path,
+        NOTEBOOK.replace(
+            r##""source": ["# Report"]"##,
+            r##""source": ["# Typeset\n", "\n", "Some words here."]"##,
+        ),
+    )
+    .unwrap();
+    let fake_nb = tmp.path().join("nb");
+    fs::write(&fake_nb, FAKE_NB).unwrap();
+    fs::set_permissions(&fake_nb, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut h = harness(&project, &fake_nb);
+    h.open_file(&nb_path).unwrap();
+    h.wait_until(|h| h.get_status_bar().starts_with(" NOTEBOOK "))
+        .unwrap();
+    // (where the n-th `+ code` row is, and the column of its word)
+    let adder = |h: &EditorTestHarness, n: usize, word: &str| -> Option<(u16, u16)> {
+        let screen = h.screen_to_string();
+        let (row, line) = screen
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("+ code") && l.contains("+ markdown"))
+            .nth(n)?;
+        let col = line[..line.find(word)?].chars().count();
+        Some((col as u16 + 2, row as u16))
+    };
+    // (once the markdown is typeset: a row under its page, and one under the code cell)
+    let placeholder = '\u{10EEEE}';
+    h.wait_until(|h| {
+        h.screen_to_string()
+            .lines()
+            .filter(|l| l.contains(placeholder))
+            .count()
+            == 3
+            && adder(h, 1, "+ markdown").is_some()
+    })
+    .unwrap();
+    // under the code cell (the last): a markdown cell after it
+    let (col, row) = adder(&h, 1, "+ markdown").unwrap();
+    h.mouse_click(col, row).unwrap();
+    h.wait_until(|h| h.screen_to_string().contains("── 3 markdown"))
+        .unwrap();
+    // under the typeset markdown cell (the first): a code cell between it and the code one
+    let (col, row) = adder(&h, 0, "+ code").unwrap();
+    h.mouse_click(col, row).unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        s.contains("── 2 [ ]") && s.contains("── 3 [ ]") && s.contains("── 4 markdown")
+    })
+    .unwrap();
+    // the new, empty cell is a box with a line to type on (its bands, a blank line between), the
+    // cursor on that line
+    let screen = h.screen_to_string();
+    let lines: Vec<&str> = screen.lines().collect();
+    let rule = lines.iter().position(|l| l.contains("── 2 [ ]")).unwrap();
+    assert!(
+        lines[rule + 1].starts_with('▄') && lines[rule + 3].starts_with('▀'),
+        "{screen}"
+    );
+    h.type_text("x = 1").unwrap();
+    h.wait_until(|h| {
+        let s = h.screen_to_string();
+        let lines: Vec<&str> = s.lines().collect();
+        let rule = lines.iter().position(|l| l.contains("── 2 [ ]"));
+        rule.is_some_and(|r| lines[r + 2].contains("x = 1"))
+    })
+    .unwrap();
+    assert_eq!(
+        saved_cells(&mut h, &project),
+        [
+            (
+                "markdown".to_string(),
+                "# Typeset\n\nSome words here.".to_string()
+            ),
+            ("code".to_string(), "x = 1".to_string()),
+            ("code".to_string(), "print('hello')".to_string()),
+            ("markdown".to_string(), "".to_string()),
+        ]
+    );
     h.assert_no_plugin_errors();
 }
