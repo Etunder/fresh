@@ -468,6 +468,22 @@ impl Editor {
         ) else {
             return Ok(());
         };
+        if clicks >= 2 {
+            // a double or triple click's press goes to `mouse_double_click`
+            // (its first press went to `mouse_click`, as a single click), so
+            // a `mouse_click` handler still hears each click once
+            let args = self.mouse_click_hook_args(
+                byte,
+                col,
+                row,
+                pane,
+                buffer_id,
+                content_rect,
+                modifiers,
+                clicks,
+            );
+            self.run_mouse_click_hook("mouse_double_click", args);
+        }
         match clicks {
             1 => self.handle_editor_click(byte, col, row, pane, buffer_id, content_rect, modifiers),
             2 => self.handle_split_double_click(pane, buffer_id, byte, col, row),

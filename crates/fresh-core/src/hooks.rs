@@ -370,6 +370,10 @@ pub enum HookArgs {
         /// And the column in it, from the text area's left edge (past
         /// the gutter).
         virtual_col: Option<u32>,
+        /// Which press of a run this is, as the editor's multi-click
+        /// detector counts them: 1 a single click, 2 a double click's
+        /// second press, 3 a triple click's third.
+        clicks: u8,
     },
 
     /// Mouse move/hover event

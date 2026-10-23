@@ -904,6 +904,7 @@ interface HookEventMap {
 
   // ── mouse ────────────────────────────────────────────────────────────────
   mouse_click: MouseClickHookArgs;
+  mouse_double_click: MouseClickHookArgs;
   mouse_move: { column: number; row: number; content_x: number; content_y: number };
   mouse_scroll: { buffer_id: number; delta: number; col: number; row: number };
 
